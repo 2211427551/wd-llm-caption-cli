@@ -1,0 +1,29 @@
+{
+    "models": [
+        {
+            "name": "gpt-4-vision-preview",
+            "description": "OpenAI GPT-4 Vision model",
+            "type": "openai"
+        },
+        {
+            "name": "gpt-4o",
+            "description": "OpenAI GPT-4o model with vision capabilities",
+            "type": "openai"
+        },
+        {
+            "name": "gpt-4o-mini",
+            "description": "OpenAI GPT-4o Mini model with vision capabilities",
+            "type": "openai"
+        },
+        {
+            "name": "claude-3-5-sonnet-20241022",
+            "description": "Anthropic Claude 3.5 Sonnet model (via OpenAI-compatible API)",
+            "type": "openai"
+        },
+        {
+            "name": "llava-v1.6-34b",
+            "description": "LLaVA 1.6 34B model (via OpenAI-compatible API)",
+            "type": "openai"
+        }
+    ]
+}

@@ -25,6 +25,7 @@ class Caption:
         self.use_qwen = False
         self.use_minicpm = False
         self.use_florence = False
+        self.use_openai = False
 
         self.my_logger = None
 
@@ -99,6 +100,7 @@ class Caption:
         self.use_minicpm = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "minicpm" else False
         self.use_florence = True if args.caption_method in ["llm", "wd+llm"] and \
                                     args.llm_choice == "florence" else False
+        self.use_openai = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "openai" else False
         # Set models save path
         if os.path.exists(Path(args.models_save_path)):
             models_save_path = Path(args.models_save_path)
@@ -190,6 +192,15 @@ class Caption:
                 config_file=llm_config_file,
                 models_save_path=models_save_path,
             )
+        elif self.use_openai:
+            # OpenAI API doesn't require downloading models
+            self.logger.info("Using OpenAI-compatible API, no model download required.")
+            if not args.llm_config:
+                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_openai.json')
+            else:
+                llm_config_file = Path(args.llm_config)
+            # Just for consistency, we'll set paths to None but validate config exists
+            self.llm_models_paths = None
 
     def load_models(
             self,
@@ -246,6 +257,15 @@ class Caption:
             self.my_llm = LLM(
                 logger=self.my_logger,
                 models_type="florence",
+                models_paths=self.llm_models_paths,
+                args=args,
+            )
+            self.my_llm.load_model()
+        elif self.use_openai:
+            # Load OpenAI-compatible API
+            self.my_llm = LLM(
+                logger=self.my_logger,
+                models_type="openai",
                 models_paths=self.llm_models_paths,
                 args=args,
             )
@@ -408,6 +428,8 @@ class Caption:
                     pbar.set_description('Processing with Mini-CPM model...')
                 elif self.use_florence:
                     pbar.set_description('Processing with Florence model...')
+                elif self.use_openai:
+                    pbar.set_description('Processing with OpenAI-compatible API...')
                 self.my_llm.inference()
                 pbar.update(1)
 
@@ -415,7 +437,7 @@ class Caption:
         else:
             if self.use_wd:
                 self.my_tagger.inference()
-            elif self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence:
+            elif self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence or self.use_openai:
                 self.my_llm.inference()
 
         total_inference_time = time.monotonic() - start_inference_time
@@ -437,7 +459,7 @@ class Caption:
         # Unload models
         if self.use_wd:
             self.my_tagger.unload_model()
-        if self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence:
+        if self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence or self.use_openai:
             self.my_llm.unload_model()
 
 
@@ -675,8 +697,8 @@ def setup_args() -> argparse.Namespace:
         '--llm_choice',
         type=str,
         default='llama',
-        choices=['joy', 'llama', 'qwen', 'minicpm', 'florence'],
-        help='select llm models[`joy`, `llama`, `qwen`, `minicpm`, `florence`], default is `llama`.',
+        choices=['joy', 'llama', 'qwen', 'minicpm', 'florence', 'openai'],
+        help='select llm models[`joy`, `llama`, `qwen`, `minicpm`, `florence`, `openai`], default is `llama`.',
     )
     llm_args.add_argument(
         '--llm_config',
@@ -751,6 +773,23 @@ def setup_args() -> argparse.Namespace:
         type=int,
         default=0,
         help='max tokens for LLM model output, default is `0`, means use llm own default value.'
+    )
+
+    openai_args = args.add_argument_group("OpenAI API")
+    openai_args.add_argument(
+        '--api_endpoint',
+        type=str,
+        help='OpenAI-compatible API endpoint URL (e.g., http://localhost:8000/v1)'
+    )
+    openai_args.add_argument(
+        '--api_key',
+        type=str,
+        help='API key for OpenAI-compatible API'
+    )
+    openai_args.add_argument(
+        '--api_model',
+        type=str,
+        help='Model name for OpenAI-compatible API'
     )
 
     gradio_args = args.add_argument_group("Gradio dummy args, no effects")

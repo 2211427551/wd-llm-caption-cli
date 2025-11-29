@@ -16,6 +16,7 @@ LLAMA_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_llama
 QWEN_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_qwen2_vl.json")
 MINICPM_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_minicpm.json")
 FLORENCE_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_florence.json")
+OPENAI_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_openai.json")
 
 SKIP_DOWNLOAD = True
 
@@ -81,7 +82,7 @@ def gui():
                             caption_method = gr.Radio(label="Caption method", choices=["WD+LLM", "WD", "LLM"],
                                                       value="WD+LLM")
                             llm_choice = gr.Radio(label="Choice LLM",
-                                                  choices=["Llama", "Joy", "Qwen", "MiniCPM", "Florence"],
+                                                  choices=["Llama", "Joy", "Qwen", "MiniCPM", "Florence", "OpenAI"],
                                                   value="Llama")
 
                             def llm_choice_visibility(caption_method_radio):
@@ -101,7 +102,9 @@ def gui():
                             minicpm_models = gr.Dropdown(label="MiniCPM models", choices=read_json(MINICPM_CONFIG),
                                                          value=read_json(MINICPM_CONFIG)[0], visible=False)
                             florence_models = gr.Dropdown(label="Florence models", choices=read_json(FLORENCE_CONFIG),
-                                                          value=read_json(FLORENCE_CONFIG)[0], visible=False)
+                                                       value=read_json(FLORENCE_CONFIG)[0], visible=False)
+                            openai_models = gr.Dropdown(label="OpenAI models", choices=read_json(OPENAI_CONFIG),
+                                                      value=read_json(OPENAI_CONFIG)[0], visible=False)
 
                     with gr.Column(min_width=240):
                         with gr.Column(min_width=240):
@@ -158,6 +161,12 @@ def gui():
                         llm_caption_extension = gr.Textbox(label="extension of LLM caption file", value=".llmcaption")
                         llm_read_wd_caption = gr.Checkbox(label="llm will read wd caption for inference")
                         llm_caption_without_wd = gr.Checkbox(label="llm will not read wd caption for inference")
+
+                        # OpenAI API settings
+                        with gr.Group() as openai_settings:
+                            gr.Markdown("<center>OpenAI API Settings</center>")
+                            api_endpoint = gr.Textbox(label="API Endpoint", placeholder="http://localhost:8000/v1", visible=False)
+                            api_key = gr.Textbox(label="API Key", type="password", placeholder="Enter your API key", visible=False)
 
                         with gr.Accordion(label="Joy Formated Prompts", open=False) as joy_formated_prompts:
                             caption_type = gr.Dropdown(
@@ -422,8 +431,12 @@ def gui():
             return system_prompt, user_prompt_str.strip()
 
         caption_method.change(fn=llm_user_prompt_default,
-                              inputs=[caption_method, llm_read_wd_caption, llm_user_prompt],
-                              outputs=llm_user_prompt)
+                               inputs=[caption_method, llm_read_wd_caption, llm_user_prompt],
+                               outputs=llm_user_prompt)
+
+        llm_choice.change(fn=update_model_visibility,
+                        inputs=llm_choice,
+                        outputs=[joy_models, llama_models, qwen_models, minicpm_models, florence_models, openai_models, api_endpoint, api_key])
 
         generate_prompt_button.click(fn=build_joy_user_prompt,
                                      inputs=[caption_method, joy_models, llm_read_wd_caption,
@@ -447,6 +460,29 @@ def gui():
 
         def use_florence(check_caption_method, check_llm_choice):
             return True if check_caption_method in ["llm", "wd+llm"] and check_llm_choice == "florence" else False
+
+        def use_openai(check_caption_method, check_llm_choice):
+            return True if check_caption_method in ["llm", "wd+llm"] and check_llm_choice.lower() == "openai" else False
+
+        def update_model_visibility(llm_choice_value):
+            """Update visibility of model dropdowns based on LLM choice"""
+            joy_visible = llm_choice_value.lower() == "joy"
+            llama_visible = llm_choice_value.lower() == "llama"
+            qwen_visible = llm_choice_value.lower() == "qwen"
+            minicpm_visible = llm_choice_value.lower() == "minicpm"
+            florence_visible = llm_choice_value.lower() == "florence"
+            openai_visible = llm_choice_value.lower() == "openai"
+            
+            return [
+                gr.update(visible=joy_visible),
+                gr.update(visible=llama_visible),
+                gr.update(visible=qwen_visible),
+                gr.update(visible=minicpm_visible),
+                gr.update(visible=florence_visible),
+                gr.update(visible=openai_visible),
+                gr.update(visible=openai_visible),  # API endpoint
+                gr.update(visible=openai_visible)   # API key
+            ]
 
         def load_models_interactive_group():
             return [
@@ -558,6 +594,9 @@ def gui():
                 qwen_model_value,
                 minicpm_model_value,
                 florence_model_value,
+                openai_model_value,
+                api_endpoint_value,
+                api_key_value,
                 wd_force_use_cpu_value,
                 llm_use_cpu_value,
                 llm_use_patch_value,
@@ -601,6 +640,15 @@ def gui():
                 elif use_florence(args.caption_method, args.llm_choice):
                     args.llm_config = FLORENCE_CONFIG
                     args.llm_model_name = str(florence_model_value)
+                elif use_openai(args.caption_method, args.llm_choice):
+                    args.llm_config = OPENAI_CONFIG
+                    args.llm_model_name = str(openai_model_value)
+                    # Set OpenAI API parameters
+                    if api_endpoint_value:
+                        args.api_endpoint = str(api_endpoint_value)
+                    if api_key_value:
+                        args.api_key = str(api_key_value)
+                    args.api_model = str(openai_model_value)
 
                 if CAPTION_FN is None:
                     CAPTION_FN = caption.Caption()
@@ -833,13 +881,14 @@ def gui():
                                 inputs=[model_site, huggingface_token,
                                         caption_method, llm_choice,
                                         wd_models, joy_models, llama_models,
-                                        qwen_models, minicpm_models, florence_models,
+                                        qwen_models, minicpm_models, florence_models, openai_models,
+                                        api_endpoint, api_key,
                                         wd_force_use_cpu,
                                         llm_use_cpu, llm_use_patch, llm_dtype, llm_qnt],
                                 outputs=[model_site, huggingface_token,
                                          caption_method, llm_choice,
                                          wd_models, joy_models, llama_models,
-                                         qwen_models, minicpm_models, florence_models,
+                                         qwen_models, minicpm_models, florence_models, openai_models,
                                          wd_force_use_cpu,
                                          llm_use_cpu, llm_use_patch, llm_dtype, llm_qnt,
                                          load_model_button, unload_model_button])
@@ -848,7 +897,7 @@ def gui():
                                   outputs=[model_site, huggingface_token,
                                            caption_method, llm_choice,
                                            wd_models, joy_models, llama_models,
-                                           qwen_models, minicpm_models, florence_models,
+                                           qwen_models, minicpm_models, florence_models, openai_models,
                                            wd_force_use_cpu,
                                            llm_use_cpu, llm_use_patch, llm_dtype, llm_qnt,
                                            load_model_button, unload_model_button])

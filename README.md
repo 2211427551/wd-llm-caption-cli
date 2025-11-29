@@ -535,6 +535,55 @@ max tokens for LLM model output, default is `0`, means use llm own default value
 
 </details>
 
+## OpenAI Compatible API Support
+
+This tool now supports OpenAI-compatible APIs for image captioning. You can use it with local LLM servers like vLLM, Ollama (with OpenAI compatibility), or any other OpenAI-compatible API.
+
+### CLI Usage Examples
+
+```bash
+# Basic usage with OpenAI-compatible API
+wd-llm-caption --data_path /path/to/images --caption_method llm --llm_choice openai --api_endpoint http://localhost:8000/v1 --api_model gpt-4-vision-preview
+
+# With API key
+wd-llm-caption --data_path /path/to/images --caption_method llm --llm_choice openai --api_endpoint http://localhost:8000/v1 --api_key your-api-key --api_model gpt-4-vision-preview
+
+# Combined with WD tags
+wd-llm-caption --data_path /path/to/images --caption_method wd+llm --llm_choice openai --api_endpoint http://localhost:8000/v1 --api_key your-api-key --api_model gpt-4-vision-preview
+```
+
+### New CLI Parameters
+
+`--api_endpoint`
+
+OpenAI-compatible API endpoint URL (e.g., http://localhost:8000/v1)
+
+`--api_key`
+
+API key for OpenAI-compatible API
+
+`--api_model`
+
+Model name for OpenAI-compatible API
+
+### GUI Usage
+
+1. Launch the GUI: `wd-llm-caption-gui`
+2. Select "OpenAI" from the LLM choices dropdown
+3. Configure your API endpoint and key in the "OpenAI API Settings" section
+4. Load models and start captioning
+
+### Supported Models
+
+The following models are pre-configured in `default_openai.json`:
+- gpt-4-vision-preview
+- gpt-4o
+- gpt-4o-mini
+- claude-3-5-sonnet-20241022
+- llava-v1.6-34b
+
+You can add more models by editing the config file.
+
 ## Credits
 
 Base

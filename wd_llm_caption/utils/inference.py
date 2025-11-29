@@ -90,7 +90,7 @@ class LLM:
             args: Namespace,
     ):
         self.logger = logger
-        if models_type in ["llama", "joy", "qwen", "minicpm", "florence"]:
+        if models_type in ["llama", "joy", "qwen", "minicpm", "florence", "openai"]:
             self.models_type = models_type
         else:
             self.logger.error(f"Invalid model type: {models_type}!!!")
@@ -139,6 +139,18 @@ class LLM:
             self.llm_path = models_paths[0]
             self.llm_processor = None
             self.llm_tokenizer = None
+
+        elif self.models_type == "openai":
+            # OpenAI API doesn't require model paths
+            self.api_endpoint = getattr(self.args, 'api_endpoint', None)
+            self.api_key = getattr(self.args, 'api_key', None)
+            self.api_model = getattr(self.args, 'api_model', None)
+            
+            if not self.api_endpoint:
+                self.logger.error("API endpoint is required for OpenAI-compatible API!")
+                raise ValueError("API endpoint is required for OpenAI-compatible API!")
+            
+            self.client = None
 
         self.llm = None
 
@@ -444,6 +456,21 @@ class LLM:
             self.image_adapter.eval()
             self.image_adapter.to(device)
             self.logger.info(f'Image Adapter Loaded in {time.monotonic() - start_time:.1f}s.')
+
+        # Load OpenAI client
+        elif self.models_type == "openai":
+            self.logger.info(f'Initializing OpenAI-compatible API client...')
+            start_time = time.monotonic()
+            try:
+                from openai import OpenAI
+                self.client = OpenAI(
+                    api_key=self.api_key or "dummy-key",
+                    base_url=self.api_endpoint
+                )
+                self.logger.info(f'OpenAI client initialized in {time.monotonic() - start_time:.1f}s.')
+            except ImportError:
+                self.logger.error('OpenAI Python SDK not found. Please install it with: pip install openai')
+                raise ImportError('OpenAI Python SDK not found. Please install it with: pip install openai')
 
     def get_caption(
             self,
@@ -754,6 +781,53 @@ class LLM:
 
                     content = run_inference("<MORE_DETAILED_CAPTION>")
 
+                elif self.models_type == "openai":
+                    import base64
+                    from io import BytesIO
+                    
+                    # Convert image to base64
+                    buffered = BytesIO()
+                    image.save(buffered, format="PNG")
+                    img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                    
+                    # Prepare messages
+                    messages = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": system_prompt})
+                    
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{img_base64}"
+                                }
+                            }
+                        ]
+                    })
+                    
+                    # Set parameters
+                    params = {
+                        "model": self.api_model or "gpt-4-vision-preview",
+                        "messages": messages,
+                        "max_tokens": max_new_tokens if max_new_tokens > 0 else 300,
+                    }
+                    
+                    if temperature > 0:
+                        params["temperature"] = temperature
+                    
+                    try:
+                        response = self.client.chat.completions.create(**params)
+                        content = response.choices[0].message.content
+                    except Exception as e:
+                        self.logger.error(f"OpenAI API call failed: {e}")
+                        raise
+
                 else:
                     if system_prompt:
                         if self.models_type == "llama" and self.args.llm_patch and self.llm_patch_path:
@@ -949,6 +1023,14 @@ class LLM:
                 del self.clip_processor
                 self.logger.info(f'CLIP unloaded in {time.monotonic() - start:.1f}s.')
                 clip_model_unloaded = True
+        # Unload OpenAI client
+        if self.models_type == "openai":
+            if hasattr(self, "client"):
+                self.logger.info(f'Closing OpenAI client...')
+                start = time.monotonic()
+                del self.client
+                self.logger.info(f'OpenAI client closed in {time.monotonic() - start:.1f}s.')
+        
         try:
             import torch
             if not self.args.llm_use_cpu:
