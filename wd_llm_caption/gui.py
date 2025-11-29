@@ -10,6 +10,7 @@ from . import caption
 from .utils import inference
 from .utils.logger import print_title
 
+
 WD_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_wd.json")
 JOY_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_joy.json")
 LLAMA_CONFIG = os.path.join(os.path.dirname(__file__), "configs", "default_llama_3.2V.json")
@@ -50,14 +51,64 @@ def gui_setup_args():
 def gui():
     print_title()
     get_gui_args = gui_setup_args()
-    if get_gui_args.theme == "ocean":
-        theme = gr.themes.Ocean()
-    elif get_gui_args.theme == "origin":
-        theme = gr.themes.Origin()
-    else:
-        theme = gr.themes.Base()
 
-    with (gr.Blocks(title="WD LLM Caption(By DukeG)", theme=theme) as demo):
+    # Gradio 6.0: Apply theme using CSS instead of theme parameter
+    theme_css = ""
+    if get_gui_args.theme == "ocean":
+        theme_css = """
+        /* Ocean theme colors */
+        .gradio-container {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .gr-button {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            border: none;
+        }
+        .gr-box {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        """
+    elif get_gui_args.theme == "origin":
+        theme_css = """
+        /* Origin theme colors */
+        .gradio-container {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        .gr-button {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            border: none;
+        }
+        .gr-box {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        """
+    else:
+        # Base theme (default)
+        theme_css = """
+        /* Base theme - minimal styling */
+        .gradio-container {
+            background: #f8f9fa;
+            color: #212529;
+        }
+        .gr-button {
+            background: #007bff;
+            border: none;
+        }
+        .gr-box {
+            background: white;
+            border: 1px solid #dee2e6;
+        }
+        """
+
+    with (gr.Blocks(title="WD LLM Caption(By DukeG)") as demo):
+        # Apply theme CSS using gr.HTML() for Gradio 6.0 compatibility
+        if theme_css:
+            gr.HTML(f"<style>{theme_css}</style>")
+
         with gr.Row(equal_height=True):
             with gr.Column(scale=6):
                 gr.Markdown("## Caption images with WD and LLM models (By DukeG)")
@@ -76,7 +127,7 @@ def gui():
                 #                             choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                 #                             value="INFO")
 
-                with gr.Row(equal_height=True) as models_settings:
+                with gr.Row(equal_height=True):
                     with gr.Column(min_width=240):
                         with gr.Column(min_width=240):
                             caption_method = gr.Radio(label="Caption method", choices=["WD+LLM", "WD", "LLM"],
@@ -163,7 +214,7 @@ def gui():
                         llm_caption_without_wd = gr.Checkbox(label="llm will not read wd caption for inference")
 
                         # OpenAI API settings
-                        with gr.Group() as openai_settings:
+                        with gr.Group():
                             gr.Markdown("<center>OpenAI API Settings</center>")
                             api_endpoint = gr.Textbox(label="API Endpoint", placeholder="http://localhost:8000/v1", visible=False)
                             api_key = gr.Textbox(label="API Key", type="password", placeholder="Enter your API key", visible=False)
@@ -226,7 +277,7 @@ def gui():
             with gr.Column():
                 with gr.Tab("Single mode"):
                     with gr.Column():
-                        input_image = gr.Image(elem_id="input_image", type='filepath', label="Upload Image",
+                        input_image = gr.Image(elem_id="input_image", type="filepath", label="Upload Image",
                                                sources=["upload", "clipboard"])
                         single_image_submit_button = gr.Button(elem_id="single_image_submit_button",
                                                                value="Inference", variant='primary')
@@ -235,12 +286,12 @@ def gui():
                         # current_image = gr.Image(label='Current Image', interactive=False)
                         # wd_tags_rating = gr.Label(label="WD Ratings")
                         # wd_tags_text = gr.Label(label="WD Tags")
-                        wd_tags_output = gr.Text(label='WD Tags Output', lines=10,
-                                                 interactive=False, show_label=True, show_copy_button=True)
-                        llm_caption_output = gr.Text(label='LLM Caption Output', lines=10,
-                                                     interactive=False, show_label=True, show_copy_button=True)
+                        wd_tags_output = gr.Textbox(label='WD Tags Output', lines=10,
+                                                  interactive=False, show_label=True)
+                        llm_caption_output = gr.Textbox(label='LLM Caption Output', lines=10,
+                                                     interactive=False, show_label=True)
 
-                with gr.Tab("Batch mode") as bs_mode:
+                with gr.Tab("Batch mode"):
                     with gr.Column(min_width=240):
                         with gr.Row():
                             input_dir = gr.Textbox(label="Batch Directory",
@@ -434,6 +485,26 @@ def gui():
                                inputs=[caption_method, llm_read_wd_caption, llm_user_prompt],
                                outputs=llm_user_prompt)
 
+        def update_model_visibility(llm_choice_value):
+            """Update visibility of model dropdowns based on LLM choice"""
+            joy_visible = llm_choice_value.lower() == "joy"
+            llama_visible = llm_choice_value.lower() == "llama"
+            qwen_visible = llm_choice_value.lower() == "qwen"
+            minicpm_visible = llm_choice_value.lower() == "minicpm"
+            florence_visible = llm_choice_value.lower() == "florence"
+            openai_visible = llm_choice_value.lower() == "openai"
+
+            return [
+                gr.update(visible=joy_visible),
+                gr.update(visible=llama_visible),
+                gr.update(visible=qwen_visible),
+                gr.update(visible=minicpm_visible),
+                gr.update(visible=florence_visible),
+                gr.update(visible=openai_visible),
+                gr.update(visible=openai_visible),  # API endpoint
+                gr.update(visible=openai_visible)   # API key
+            ]
+
         llm_choice.change(fn=update_model_visibility,
                         inputs=llm_choice,
                         outputs=[joy_models, llama_models, qwen_models, minicpm_models, florence_models, openai_models, api_endpoint, api_key])
@@ -463,26 +534,6 @@ def gui():
 
         def use_openai(check_caption_method, check_llm_choice):
             return True if check_caption_method in ["llm", "wd+llm"] and check_llm_choice.lower() == "openai" else False
-
-        def update_model_visibility(llm_choice_value):
-            """Update visibility of model dropdowns based on LLM choice"""
-            joy_visible = llm_choice_value.lower() == "joy"
-            llama_visible = llm_choice_value.lower() == "llama"
-            qwen_visible = llm_choice_value.lower() == "qwen"
-            minicpm_visible = llm_choice_value.lower() == "minicpm"
-            florence_visible = llm_choice_value.lower() == "florence"
-            openai_visible = llm_choice_value.lower() == "openai"
-            
-            return [
-                gr.update(visible=joy_visible),
-                gr.update(visible=llama_visible),
-                gr.update(visible=qwen_visible),
-                gr.update(visible=minicpm_visible),
-                gr.update(visible=florence_visible),
-                gr.update(visible=openai_visible),
-                gr.update(visible=openai_visible),  # API endpoint
-                gr.update(visible=openai_visible)   # API key
-            ]
 
         def load_models_interactive_group():
             return [
@@ -866,7 +917,7 @@ def gui():
         def caption_unload_models():
             global IS_MODEL_LOAD
             if IS_MODEL_LOAD:
-                get_caption_args, get_caption_fn = ARGS, CAPTION_FN
+                get_caption_fn = CAPTION_FN
                 get_caption_fn.unload_models()
 
                 IS_MODEL_LOAD = False
