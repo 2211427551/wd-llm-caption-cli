@@ -109,6 +109,11 @@ def gui():
         if theme_css:
             gr.HTML(f"<style>{theme_css}</style>")
 
+        # Session state for OpenAI API settings
+        api_endpoint_state = gr.State(value="")
+        api_key_state = gr.State(value="")
+        custom_model_name_state = gr.State(value="")
+
         with gr.Row(equal_height=True):
             with gr.Column(scale=6):
                 gr.Markdown("## Caption images with WD and LLM models (By DukeG)")
@@ -153,9 +158,7 @@ def gui():
                             minicpm_models = gr.Dropdown(label="MiniCPM models", choices=read_json(MINICPM_CONFIG),
                                                          value=read_json(MINICPM_CONFIG)[0], visible=False)
                             florence_models = gr.Dropdown(label="Florence models", choices=read_json(FLORENCE_CONFIG),
-                                                       value=read_json(FLORENCE_CONFIG)[0], visible=False)
-                            openai_models = gr.Dropdown(label="OpenAI models", choices=read_json(OPENAI_CONFIG),
-                                                      value=read_json(OPENAI_CONFIG)[0], visible=False)
+                                                        value=read_json(FLORENCE_CONFIG)[0], visible=False)
 
                     with gr.Column(min_width=240):
                         with gr.Column(min_width=240):
@@ -214,10 +217,35 @@ def gui():
                         llm_caption_without_wd = gr.Checkbox(label="llm will not read wd caption for inference")
 
                         # OpenAI API settings
-                        with gr.Group():
+                        with gr.Group(visible=False) as openai_settings_group:
                             gr.Markdown("<center>OpenAI API Settings</center>")
-                            api_endpoint = gr.Textbox(label="API Endpoint", placeholder="http://localhost:8000/v1", visible=False)
-                            api_key = gr.Textbox(label="API Key", type="password", placeholder="Enter your API key", visible=False)
+
+                            # Connection settings
+                            with gr.Row():
+                                api_endpoint = gr.Textbox(label="API Endpoint", placeholder="http://localhost:8000/v1",
+                                                         info="OpenAI-compatible API endpoint URL", scale=3)
+                                api_key = gr.Textbox(label="API Key", type="password", placeholder="Enter your API key",
+                                                     info="Authentication key", scale=2)
+
+                            # Model selection with both dropdown and custom input
+                            gr.Markdown("**Model Selection**")
+                            with gr.Row():
+                                openai_models = gr.Dropdown(label="Preset Models", choices=read_json(OPENAI_CONFIG),
+                                                           value=read_json(OPENAI_CONFIG)[0],
+                                                           info="Select from preset models or use custom name below")
+
+                            # Custom model name input
+                            custom_model_name = gr.Textbox(label="Custom Model Name", placeholder="Enter custom model name (overrides preset)",
+                                                         info="Leave empty to use preset model selection")
+
+                            # Auto-fetch models functionality
+                            with gr.Row():
+                                fetch_models_button = gr.Button(value="🔄 Get Models from Endpoint", variant="secondary", size="sm")
+                                model_fetch_status = gr.Textbox(label="Status", interactive=False, visible=False, size="sm",
+                                                             info="Model fetch results will appear here")
+
+                            # Help text
+                            gr.Markdown("*Tip: Use 'Get Models from Endpoint' to auto-discover available models from your API*")
 
                         with gr.Accordion(label="Joy Formated Prompts", open=False) as joy_formated_prompts:
                             caption_type = gr.Dropdown(
@@ -332,8 +360,9 @@ def gui():
                 visible=True if "LLM" in caption_method_radio else False)
             wd_settings_visible = gr.update(visible=True if "WD" in caption_method_radio else False)
             llm_settings_visible = gr.update(visible=True if "LLM" in caption_method_radio else False)
+            openai_settings_visible = gr.update(visible=True if "LLM" in caption_method_radio else False)
             return run_method_visible, wd_model_visible, wd_force_use_cpu_visible, \
-                llm_use_cpu_visible, wd_settings_visible, llm_load_settings_visible, llm_settings_visible
+                llm_use_cpu_visible, wd_settings_visible, llm_load_settings_visible, llm_settings_visible, openai_settings_visible
 
         def llm_choice_update_visibility(caption_method_radio, llm_choice_radio, joy_models_dropdown):
             joy_model_visible = gr.update(
@@ -363,7 +392,7 @@ def gui():
 
         caption_method.change(fn=caption_method_update_visibility, inputs=caption_method,
                               outputs=[run_method, wd_models, wd_force_use_cpu, llm_use_cpu,
-                                       wd_settings, llm_load_settings, llm_settings])
+                                       wd_settings, llm_load_settings, llm_settings, openai_settings_group])
         caption_method.change(fn=llm_choice_update_visibility, inputs=[caption_method, llm_choice, joy_models],
                               outputs=[joy_models, llama_models, llm_use_patch,
                                        qwen_models, minicpm_models, florence_models])
@@ -501,18 +530,89 @@ def gui():
                 gr.update(visible=minicpm_visible),
                 gr.update(visible=florence_visible),
                 gr.update(visible=openai_visible),
-                gr.update(visible=openai_visible),  # API endpoint
-                gr.update(visible=openai_visible)   # API key
+                gr.update(visible=openai_visible)   # OpenAI settings group
             ]
 
         llm_choice.change(fn=update_model_visibility,
                         inputs=llm_choice,
-                        outputs=[joy_models, llama_models, qwen_models, minicpm_models, florence_models, openai_models, api_endpoint, api_key])
+                        outputs=[joy_models, llama_models, qwen_models, minicpm_models, florence_models, openai_models, openai_settings_group])
 
         generate_prompt_button.click(fn=build_joy_user_prompt,
                                      inputs=[caption_method, joy_models, llm_read_wd_caption,
                                              caption_type, caption_length, extra_options, name_input],
                                      outputs=[llm_system_prompt, llm_user_prompt])
+
+        def fetch_openai_models(api_endpoint_value, api_key_value):
+            """Fetch available models from OpenAI-compatible API endpoint"""
+            try:
+                if not api_endpoint_value:
+                    return gr.update(choices=[]), gr.update(value="Error: API endpoint is required", visible=True)
+
+                # Import here to avoid dependency issues if not using OpenAI
+                try:
+                    from openai import OpenAI
+                except ImportError:
+                    return gr.update(choices=[]), gr.update(value="Error: OpenAI SDK not installed. Run: pip install openai", visible=True)
+
+                # Initialize client
+                client = OpenAI(
+                    api_key=api_key_value or "dummy-key",
+                    base_url=api_endpoint_value.rstrip('/')  # Remove trailing slash
+                )
+
+                # Fetch models
+                models_response = client.models.list()
+                model_names = [model.id for model in models_response.data if hasattr(model, 'id')]
+
+                if not model_names:
+                    return gr.update(choices=[]), gr.update(value="No models found", visible=True)
+
+                # Filter for vision models (those that might support images)
+                vision_keywords = ['vision', 'gpt-4', 'claude', 'llava', 'multimodal']
+                vision_models = [name for name in model_names
+                               if any(keyword in name.lower() for keyword in vision_keywords)]
+
+                if vision_models:
+                    model_names = vision_models
+
+                return gr.update(choices=model_names, value=model_names[0] if model_names else None), \
+                       gr.update(value=f"Found {len(model_names)} models", visible=True)
+
+            except Exception as e:
+                error_msg = f"Error fetching models: {str(e)}"
+                return gr.update(choices=[]), gr.update(value=error_msg, visible=True)
+
+        def validate_api_endpoint(api_endpoint_value):
+            """Validate API endpoint format and provide feedback"""
+            if not api_endpoint_value:
+                return gr.update(interactive=False)
+
+            if not (api_endpoint_value.startswith('http://') or api_endpoint_value.startswith('https://')):
+                return gr.update(interactive=False)
+
+            return gr.update(interactive=True)
+
+        # Auto-fetch models button handler
+        fetch_models_button.click(fn=fetch_openai_models,
+                                 inputs=[api_endpoint, api_key],
+                                 outputs=[openai_models, model_fetch_status])
+
+        # Enable/disable fetch button based on endpoint validity
+        api_endpoint.change(fn=validate_api_endpoint, inputs=api_endpoint, outputs=fetch_models_button)
+
+        # Update session state when values change
+        def update_session_state(endpoint, key, custom_name):
+            return endpoint, key, custom_name
+
+        api_endpoint.change(fn=update_session_state,
+                          inputs=[api_endpoint, api_key, custom_model_name],
+                          outputs=[api_endpoint_state, api_key_state, custom_model_name_state])
+        api_key.change(fn=update_session_state,
+                      inputs=[api_endpoint, api_key, custom_model_name],
+                      outputs=[api_endpoint_state, api_key_state, custom_model_name_state])
+        custom_model_name.change(fn=update_session_state,
+                              inputs=[api_endpoint, api_key, custom_model_name],
+                              outputs=[api_endpoint_state, api_key_state, custom_model_name_state])
 
         def use_wd(check_caption_method):
             return True if check_caption_method in ["wd", "wd+llm"] else False
@@ -648,6 +748,7 @@ def gui():
                 openai_model_value,
                 api_endpoint_value,
                 api_key_value,
+                custom_model_name_value,
                 wd_force_use_cpu_value,
                 llm_use_cpu_value,
                 llm_use_patch_value,
@@ -692,14 +793,27 @@ def gui():
                     args.llm_config = FLORENCE_CONFIG
                     args.llm_model_name = str(florence_model_value)
                 elif use_openai(args.caption_method, args.llm_choice):
+                    # Validate OpenAI API parameters
+                    if not api_endpoint_value:
+                        raise gr.Error("API Endpoint is required for OpenAI-compatible API!")
+
+                    # Validate URL format
+                    if not (api_endpoint_value.startswith('http://') or api_endpoint_value.startswith('https://')):
+                        raise gr.Error("API Endpoint must start with http:// or https://")
+
                     args.llm_config = OPENAI_CONFIG
-                    args.llm_model_name = str(openai_model_value)
+
+                    # Use custom model name if provided, otherwise use dropdown selection
+                    model_name = custom_model_name_value.strip() if custom_model_name_value and custom_model_name_value.strip() else openai_model_value
+                    if not model_name:
+                        raise gr.Error("Model name is required!")
+
+                    args.llm_model_name = str(model_name)
+
                     # Set OpenAI API parameters
-                    if api_endpoint_value:
-                        args.api_endpoint = str(api_endpoint_value)
-                    if api_key_value:
-                        args.api_key = str(api_key_value)
-                    args.api_model = str(openai_model_value)
+                    args.api_endpoint = str(api_endpoint_value)
+                    args.api_key = str(api_key_value) if api_key_value else None
+                    args.api_model = str(model_name)
 
                 if CAPTION_FN is None:
                     CAPTION_FN = caption.Caption()
@@ -805,18 +919,32 @@ def gui():
                     or use_llama(args.caption_method, args.llm_choice) \
                     or use_qwen(args.caption_method, args.llm_choice) \
                     or use_minicpm(args.caption_method, args.llm_choice) \
-                    or use_florence(args.caption_method, args.llm_choice):
+                    or use_florence(args.caption_method, args.llm_choice) \
+                    or use_openai(args.caption_method, args.llm_choice):
                 get_caption_fn.my_logger.debug(f"Caption with LLM: {args.llm_model_name}.")
-                # LLM Caption
-                caption_text = get_caption_fn.my_llm.get_caption(
-                    image=image,
-                    system_prompt=str(args.llm_system_prompt),
-                    user_prompt=str(args.llm_user_prompt).format(wd_tags=tag_text) if tag_text else \
-                        str(args.llm_user_prompt),
-                    temperature=args.llm_temperature,
-                    max_new_tokens=args.llm_max_tokens
-                )
-                get_caption_fn.my_logger.info(f"LLM Caption content: {caption_text}")
+                try:
+                    # LLM Caption
+                    caption_text = get_caption_fn.my_llm.get_caption(
+                        image=image,
+                        system_prompt=str(args.llm_system_prompt),
+                        user_prompt=str(args.llm_user_prompt).format(wd_tags=tag_text) if tag_text else \
+                            str(args.llm_user_prompt),
+                        temperature=args.llm_temperature,
+                        max_new_tokens=args.llm_max_tokens
+                    )
+                    get_caption_fn.my_logger.info(f"LLM Caption content: {caption_text}")
+                except Exception as e:
+                    error_msg = f"LLM inference failed: {str(e)}"
+                    get_caption_fn.my_logger.error(error_msg)
+                    if use_openai(args.caption_method, args.llm_choice):
+                        # Provide more user-friendly error messages for OpenAI
+                        if "401" in str(e) or "unauthorized" in str(e).lower():
+                            error_msg = "API authentication failed. Please check your API key."
+                        elif "connection" in str(e).lower() or "network" in str(e).lower():
+                            error_msg = "Connection failed. Please check your API endpoint and network connection."
+                        elif "model" in str(e).lower() and "not found" in str(e).lower():
+                            error_msg = "Model not found. Please check the model name and availability."
+                    raise gr.Error(error_msg)
             gr.Info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
             get_caption_fn.my_logger.info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
             if auto_unload_value:
@@ -905,8 +1033,24 @@ def gui():
                     raise gr.Error(f"{args.data_path} NOT FOUND!!!")
 
                 start_time = time.monotonic()
-                get_caption_fn.run_inference(args)
-                gr.Info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
+                try:
+                    get_caption_fn.run_inference(args)
+                    gr.Info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
+                except Exception as e:
+                    error_msg = f"Batch inference failed: {str(e)}"
+                    get_caption_fn.my_logger.error(error_msg)
+                    if use_openai(args.caption_method, args.llm_choice):
+                        # Provide more user-friendly error messages for OpenAI
+                        if "401" in str(e) or "unauthorized" in str(e).lower():
+                            error_msg = "API authentication failed. Please check your API key."
+                        elif "connection" in str(e).lower() or "network" in str(e).lower():
+                            error_msg = "Connection failed. Please check your API endpoint and network connection."
+                        elif "model" in str(e).lower() and "not found" in str(e).lower():
+                            error_msg = "Model not found. Please check the model name and availability."
+                        elif "rate" in str(e).lower() and "limit" in str(e).lower():
+                            error_msg = "API rate limit exceeded. Please try again later or check your plan limits."
+                    raise gr.Error(error_msg)
+
                 if auto_unload_value:
                     caption_unload_models()
 
@@ -933,7 +1077,7 @@ def gui():
                                         caption_method, llm_choice,
                                         wd_models, joy_models, llama_models,
                                         qwen_models, minicpm_models, florence_models, openai_models,
-                                        api_endpoint, api_key,
+                                        api_endpoint, api_key, custom_model_name,
                                         wd_force_use_cpu,
                                         llm_use_cpu, llm_use_patch, llm_dtype, llm_qnt],
                                 outputs=[model_site, huggingface_token,
