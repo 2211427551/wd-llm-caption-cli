@@ -1035,17 +1035,23 @@ class LLM:
                 start = time.monotonic()
                 del self.client
                 self.logger.info(f'OpenAI client closed in {time.monotonic() - start:.1f}s.')
+            llm_unloaded = True
         
-        try:
-            import torch
-            if not self.args.llm_use_cpu:
-                self.logger.debug(f'Will empty cuda device cache...')
-                torch.cuda.empty_cache()
-        except ImportError as ie:
-            self.logger.error(f'Import torch Failed!\nDetails: {ie}')
-            raise ImportError
+        if self.models_type != "openai":
+            try:
+                import torch
+                if not self.args.llm_use_cpu:
+                    self.logger.debug(f'Attempting to empty cuda device cache...')
+                    torch.cuda.empty_cache()
+                    self.logger.debug(f'Cuda device cache emptied.')
+            except ImportError as ie:
+                self.logger.error(f'Import torch Failed!\nDetails: {ie}')
+                raise ImportError
 
-        return image_adapter_unloaded and llm_unloaded and clip_model_unloaded
+        if self.models_type == "joy":
+            return image_adapter_unloaded and llm_unloaded and clip_model_unloaded
+        else:
+            return llm_unloaded
 
 
 class Tagger:

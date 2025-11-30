@@ -468,10 +468,12 @@ class Caption:
             self
     ):
         # Unload models
+        unloaded = False
         if self.use_wd:
             self.my_tagger.unload_model()
         if self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence or self.use_openai:
-            self.my_llm.unload_model()
+            unloaded = self.my_llm.unload_model()
+        return unloaded
 
 
 def setup_args() -> argparse.Namespace:

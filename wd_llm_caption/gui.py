@@ -1119,7 +1119,9 @@ def gui():
             global IS_MODEL_LOAD
             if IS_MODEL_LOAD:
                 get_caption_fn = CAPTION_FN
-                get_caption_fn.unload_models()
+                logger.info("Calling unload_models...")
+                unloaded = get_caption_fn.unload_models()
+                logger.info(f"unload_models returned: {unloaded}")
 
                 IS_MODEL_LOAD = False
 
