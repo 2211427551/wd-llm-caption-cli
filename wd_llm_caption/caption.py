@@ -213,6 +213,7 @@ class Caption:
             self,
             args: argparse.Namespace
     ):
+        self.my_logger.info("Starting to load models...")
         if self.use_wd:
             # Load wd models
             self.my_tagger = Tagger(
@@ -269,6 +270,7 @@ class Caption:
             )
             self.my_llm.load_model()
         elif self.use_openai:
+            self.my_logger.info("Loading OpenAI-compatible API...")
             # Load OpenAI-compatible API
             self.my_llm = LLM(
                 logger=self.my_logger,
@@ -276,7 +278,9 @@ class Caption:
                 models_paths=self.llm_models_paths,
                 args=args,
             )
+            self.my_logger.info("Calling my_llm.load_model()...")
             self.my_llm.load_model()
+            self.my_logger.info("my_llm.load_model() finished.")
 
     def run_inference(
             self,

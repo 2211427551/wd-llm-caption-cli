@@ -1,6 +1,9 @@
 import argparse
 import json
+import logging
 import os
+import subprocess
+import sys
 import time
 
 import gradio as gr
@@ -51,6 +54,16 @@ def gui_setup_args():
 def gui():
     print_title()
     get_gui_args = gui_setup_args()
+
+    # Set up logging
+    log_level = get_gui_args.log_level.upper()
+    logger = logging.getLogger(__name__)
+    logger.setLevel(log_level)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
 
     # Gradio 6.0: Apply theme using CSS instead of theme parameter
     theme_css = ""
@@ -241,7 +254,7 @@ def gui():
                             # Auto-fetch models functionality
                             with gr.Row():
                                 fetch_models_button = gr.Button(value="🔄 Get Models from Endpoint", variant="secondary", size="sm")
-                                model_fetch_status = gr.Textbox(label="Status", interactive=False, visible=False, size="sm",
+                                model_fetch_status = gr.Textbox(label="Status", interactive=False, visible=False, 
                                                              info="Model fetch results will appear here")
 
                             # Help text
@@ -544,43 +557,85 @@ def gui():
 
         def fetch_openai_models(api_endpoint_value, api_key_value):
             """Fetch available models from OpenAI-compatible API endpoint"""
+            logger.info("Fetching OpenAI models using subprocess...")
+
+            # Automatically correct the API endpoint if it contains /chat/completions
+            if api_endpoint_value.endswith('/chat/completions'):
+                api_endpoint_value = api_endpoint_value[:-len('/chat/completions')]
+                logger.info(f"Corrected API Endpoint to: {api_endpoint_value}")
+
+            logger.debug(f"API Endpoint: {api_endpoint_value}")
+
             try:
-                if not api_endpoint_value:
-                    return gr.update(choices=[]), gr.update(value="Error: API endpoint is required", visible=True)
+                python_executable = sys.executable
+                helper_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'api_helper.py')
 
-                # Import here to avoid dependency issues if not using OpenAI
-                try:
-                    from openai import OpenAI
-                except ImportError:
-                    return gr.update(choices=[]), gr.update(value="Error: OpenAI SDK not installed. Run: pip install openai", visible=True)
+                cmd = [
+                    python_executable,
+                    helper_script,
+                    "list_models",
+                    api_endpoint_value,
+                    api_key_value or "None",
+                ]
 
-                # Initialize client
-                client = OpenAI(
-                    api_key=api_key_value or "dummy-key",
-                    base_url=api_endpoint_value.rstrip('/')  # Remove trailing slash
-                )
+                logger.debug(f"Running command: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding='utf-8')
+                
+                output = result.stdout.strip()
+                logger.debug(f"Subprocess stdout: {output}")
+                
+                stderr_output = result.stderr.strip()
+                if stderr_output:
+                    logger.debug(f"Subprocess stderr: {stderr_output}")
 
-                # Fetch models
-                models_response = client.models.list()
-                model_names = [model.id for model in models_response.data if hasattr(model, 'id')]
+                if result.returncode != 0:
+                    try:
+                        error_json = json.loads(output)
+                        if isinstance(error_json, dict) and "error" in error_json:
+                            raise Exception(error_json["error"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    raise Exception(f"Subprocess failed with exit code {result.returncode}")
+
+                if not output:
+                    raise Exception("Subprocess returned empty output.")
+
+                model_names = json.loads(output)
+
+                if isinstance(model_names, dict) and "error" in model_names:
+                    raise Exception(model_names["error"])
+                
+                logger.info(f"Found {len(model_names)} models: {model_names}")
 
                 if not model_names:
-                    return gr.update(choices=[]), gr.update(value="No models found", visible=True)
+                    logger.warning("No models found in API response.")
+                    return gr.update(choices=[], value=None), gr.update(value="No models found", visible=True)
 
-                # Filter for vision models (those that might support images)
-                vision_keywords = ['vision', 'gpt-4', 'claude', 'llava', 'multimodal']
+                vision_keywords = ['vision', 'gpt-4', 'claude', 'llava', 'multimodal', 'qwen']
                 vision_models = [name for name in model_names
                                if any(keyword in name.lower() for keyword in vision_keywords)]
-
+                
                 if vision_models:
+                    logger.info(f"Filtered to {len(vision_models)} vision models: {vision_models}")
                     model_names = vision_models
 
-                return gr.update(choices=model_names, value=model_names[0] if model_names else None), \
+                default_model = model_names[0] if model_names else None
+                if default_model not in model_names:
+                    logger.warning(f"Default model {default_model} not in the list of available models.")
+                    default_model = None
+
+                logger.info(f"Updating dropdown with models: {model_names}, default: {default_model}")
+                return gr.update(choices=model_names, value=default_model), \
                        gr.update(value=f"Found {len(model_names)} models", visible=True)
 
+            except subprocess.TimeoutExpired:
+                error_msg = "Error fetching models: Subprocess timed out."
+                logger.error(error_msg)
+                return gr.update(choices=[], value=None), gr.update(value=error_msg, visible=True)
             except Exception as e:
                 error_msg = f"Error fetching models: {str(e)}"
-                return gr.update(choices=[]), gr.update(value=error_msg, visible=True)
+                logger.error(error_msg, exc_info=True)
+                return gr.update(choices=[], value=None), gr.update(value=error_msg, visible=True)
 
         def validate_api_endpoint(api_endpoint_value):
             """Validate API endpoint format and provide feedback"""
@@ -652,12 +707,14 @@ def gui():
                 gr.update(interactive=False),
                 gr.update(interactive=False),
                 gr.update(interactive=False),
+                gr.update(interactive=False),
                 gr.update(variant='secondary'),
                 gr.update(variant='primary')
             ]
 
         def unloads_models_interactive_group():
             return [
+                gr.update(interactive=True),
                 gr.update(interactive=True),
                 gr.update(interactive=True),
                 gr.update(interactive=True),
