@@ -462,7 +462,8 @@ class LLM:
             import subprocess
             import sys
             import json
-    
+            import tempfile
+
             self.logger.info("Getting caption from OpenAI API using subprocess...")
     
             temp_file_path = None
@@ -486,8 +487,6 @@ class LLM:
                     "max_tokens": max_new_tokens,
                 }
                 
-                # Use a temporary file to pass data to the subprocess, avoiding pipe deadlocks
-                import tempfile
                 with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=".json", encoding='utf-8') as temp_f:
                     json.dump(input_data, temp_f)
                     temp_file_path = temp_f.name
@@ -499,7 +498,8 @@ class LLM:
                     temp_file_path,
                 ]
     
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, encoding='utf-8')
+                # Use subprocess.run and wait for the result, with a long timeout.
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, encoding='utf-8')
                 
                 output = result.stdout.strip()
                 
@@ -514,7 +514,7 @@ class LLM:
                             raise Exception(error_json["error"])
                     except (json.JSONDecodeError, TypeError):
                         pass
-                    raise Exception(f"Subprocess failed with exit code {result.returncode}")    
+                    raise Exception(f"Subprocess failed with exit code {result.returncode}. Stderr: {stderr_output}")
                 if not output:
                     raise Exception("Subprocess returned empty output.")
     
@@ -999,59 +999,27 @@ class LLM:
         pbar.close()
 
     def unload_model(self) -> bool:
-        image_adapter_unloaded = llm_unloaded = clip_model_unloaded = False
-        # Unload Image Adapter
-        if self.models_type == "joy":
-            if hasattr(self, "image_adapter"):
-                self.logger.info(f'Unloading Image Adapter...')
-                start = time.monotonic()
-                del self.image_adapter
-                self.logger.info(f'Image Adapter unloaded in {time.monotonic() - start:.1f}s.')
-                image_adapter_unloaded = True
-        # Unload LLM
-        if hasattr(self, "llm"):
-            self.logger.info(f'Unloading LLM...')
-            start = time.monotonic()
-            del self.llm
-            if hasattr(self, "llm_processer"):
-                del self.llm_processor
-            if hasattr(self, "llm_tokenizer"):
-                del self.llm_tokenizer
-            self.logger.info(f'LLM unloaded in {time.monotonic() - start:.1f}s.')
-            llm_unloaded = True
-        # Unload CLIP
-        if self.models_type == "joy":
-            if hasattr(self, "clip_model"):
-                self.logger.info(f'Unloading CLIP...')
-                start = time.monotonic()
-                del self.clip_model
-                del self.clip_processor
-                self.logger.info(f'CLIP unloaded in {time.monotonic() - start:.1f}s.')
-                clip_model_unloaded = True
-        # Unload OpenAI client
+        self.logger.info(f"Unloading model type: {self.models_type}...")
+        unloaded = False
+
         if self.models_type == "openai":
             if hasattr(self, "client"):
-                self.logger.info(f'Closing OpenAI client...')
-                start = time.monotonic()
+                self.logger.info("Closing OpenAI client...")
                 del self.client
-                self.logger.info(f'OpenAI client closed in {time.monotonic() - start:.1f}s.')
-            llm_unloaded = True
-        
-        if self.models_type != "openai":
-            try:
-                import torch
-                if not self.args.llm_use_cpu:
-                    self.logger.debug(f'Attempting to empty cuda device cache...')
-                    torch.cuda.empty_cache()
-                    self.logger.debug(f'Cuda device cache emptied.')
-            except ImportError as ie:
-                self.logger.error(f'Import torch Failed!\nDetails: {ie}')
-                raise ImportError
+            unloaded = True
+        else:  # Local models
+            if hasattr(self, "llm"):
+                self.logger.info(f"Unloading LLM: {self.args.llm_model_name}")
+                del self.llm
+                unloaded = True
 
-        if self.models_type == "joy":
-            return image_adapter_unloaded and llm_unloaded and clip_model_unloaded
-        else:
-            return llm_unloaded
+            # Clean up all possible related components
+            for attr in ["llm_processor", "llm_tokenizer", "clip_model", "clip_processor", "image_adapter"]:
+                if hasattr(self, attr):
+                    delattr(self, attr)
+                    self.logger.info(f"Unloaded component: {attr}")
+        
+        return unloaded
 
 
 class Tagger:

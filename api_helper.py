@@ -55,20 +55,15 @@ def get_caption(api_endpoint, api_key, model, system_prompt, user_prompt, image_
             "model": model,
             "messages": messages,
             "max_tokens": int(max_tokens) if int(max_tokens) > 0 else 1024,
-            "stream": True # Explicitly enable streaming
+            "stream": False # Explicitly disable streaming
         }
         
         if float(temperature) > 0:
             params["temperature"] = float(temperature)
         
-        response_stream = client.chat.completions.create(**params)
+        response = client.chat.completions.create(**params)
         
-        full_content = ""
-        for chunk in response_stream:
-            if chunk.choices and len(chunk.choices) > 0:
-                delta = chunk.choices[0].delta
-                if delta and delta.content:
-                    full_content += delta.content
+        full_content = response.choices[0].message.content
         
         print(json.dumps({"caption": full_content}))
 

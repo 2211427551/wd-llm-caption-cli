@@ -472,7 +472,24 @@ class Caption:
         if self.use_wd:
             self.my_tagger.unload_model()
         if self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence or self.use_openai:
-            unloaded = self.my_llm.unload_model()
+            if self.my_llm:
+                unloaded = self.my_llm.unload_model()
+        
+        # Safely empty cache after all models are unloaded, only if not in OpenAI mode
+        if not self.use_openai:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    if self.my_logger:
+                        self.my_logger.info("CUDA cache emptied.")
+            except ImportError:
+                if self.my_logger:
+                    self.my_logger.debug("Torch not installed, skipping CUDA cache clear.")
+            except Exception as e:
+                if self.my_logger:
+                    self.my_logger.error(f"Failed to empty CUDA cache: {e}")
+
         return unloaded
 
 

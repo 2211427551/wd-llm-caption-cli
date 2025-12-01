@@ -831,6 +831,14 @@ def gui():
                 args.caption_method = str(caption_method_value).lower()
                 args.llm_choice = str(llm_choice_value).lower()
 
+                # Guard against state confusion: If in openai mode, ensure all model names are sourced from openai settings.
+                if args.llm_choice == 'openai':
+                    model_name_from_api_settings = custom_model_name_value.strip() if custom_model_name_value and custom_model_name_value.strip() else openai_model_value
+                    if not model_name_from_api_settings:
+                        raise gr.Error("Model name is required for OpenAI mode, please specify it in the OpenAI API Settings.")
+                    args.llm_model_name = str(model_name_from_api_settings)
+                    args.api_model = str(model_name_from_api_settings)
+
                 if use_wd(args.caption_method):
                     args.wd_config = WD_CONFIG
                     args.wd_model_name = str(wd_model_value)
@@ -971,6 +979,7 @@ def gui():
                     get_caption_fn.my_logger.debug(f"WD Character tags: {character_tag_text}")
                 get_caption_fn.my_logger.debug(f"WD General tags: {general_tag_text}")
                 get_caption_fn.my_logger.info(f"WD tags content: {tag_text}")
+                yield tag_text, "" # Yield initial WD tags
 
             if use_joy(args.caption_method, args.llm_choice) \
                     or use_llama(args.caption_method, args.llm_choice) \
@@ -980,7 +989,7 @@ def gui():
                     or use_openai(args.caption_method, args.llm_choice):
                 get_caption_fn.my_logger.debug(f"Caption with LLM: {args.llm_model_name}.")
                 try:
-                    # LLM Caption
+                    # LLM Caption (blocking call, not a generator anymore)
                     caption_text = get_caption_fn.my_llm.get_caption(
                         image=image,
                         system_prompt=str(args.llm_system_prompt),
@@ -1006,7 +1015,7 @@ def gui():
             get_caption_fn.my_logger.info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
             if auto_unload_value:
                 caption_unload_models()
-            return tag_text, caption_text
+            return gr.update(value=tag_text), gr.update(value=caption_text)
 
         def caption_batch_inference(batch_process_submit_button_value,
                                     run_method_value,
