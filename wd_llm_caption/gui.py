@@ -345,6 +345,8 @@ def gui():
                         with gr.Row(equal_height=True):
                             run_method = gr.Radio(label="Run method", choices=['sync', 'queue'],
                                                   value="sync", interactive=True)
+                            num_workers = gr.Slider(label="Concurrency", minimum=1, maximum=10, step=1, value=1,
+                                                    info="Number of concurrent threads for batch processing")
 
                             with gr.Column(min_width=240):
                                 skip_exists = gr.Checkbox(label="Will not caption if caption file exists")
@@ -785,6 +787,7 @@ def gui():
                                       input_dir,
                                       is_recursive,
                                       custom_caption_save_path,
+                                      num_workers,
                                       skip_exists,
                                       not_overwrite,
                                       caption_extension,
@@ -895,10 +898,10 @@ def gui():
                 args.skip_download = SKIP_DOWNLOAD
 
                 caption_init.download_models(args)
-                caption_init.load_models(args)
+                # caption_init.load_models(args) # We will not load models here anymore, let the inference function handle it.
 
-                IS_MODEL_LOAD = True
-                gr.Info(f"Models loaded in {time.monotonic() - start_time:.1f}s.")
+                IS_MODEL_LOAD = True # This flag now means "ready to process", not "models are loaded".
+                gr.Info(f"System ready. Models will be loaded on-demand.")
                 return load_models_interactive_group()
             else:
                 args = ARGS
@@ -935,8 +938,12 @@ def gui():
                                      auto_unload_value,
                                      input_image_value):
             if not IS_MODEL_LOAD:
-                raise gr.Error("Models not loaded!")
+                raise gr.Error("System not initialized! Please click 'Load Models' first (even for API usage).")
             args, get_caption_fn = ARGS, CAPTION_FN
+            
+            # Load models for single inference
+            get_caption_fn.load_models(args)
+
             # Read args
             args.wd_remove_underscore = bool(wd_remove_underscore_value)
             args.wd_threshold = float(wd_threshold_value)
@@ -1013,8 +1020,12 @@ def gui():
                     raise gr.Error(error_msg)
             gr.Info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
             get_caption_fn.my_logger.info(f"Inference end in {time.monotonic() - start_time:.1f}s.")
+            
+            # Unload models after single inference
+            get_caption_fn.unload_models()
             if auto_unload_value:
-                caption_unload_models()
+                # This is now redundant as we always unload after single inference
+                pass
             return gr.update(value=tag_text), gr.update(value=caption_text)
 
         def caption_batch_inference(batch_process_submit_button_value,
@@ -1044,6 +1055,7 @@ def gui():
                                     input_dir_value,
                                     recursive_value,
                                     custom_caption_save_path_value,
+                                    num_workers_value,
                                     skip_exists_value,
                                     not_overwrite_value,
                                     caption_extension_value,
@@ -1051,7 +1063,7 @@ def gui():
                                     save_caption_together_seperator_value):
             if batch_process_submit_button_value == "Batch Process":
                 if not IS_MODEL_LOAD:
-                    raise gr.Error("Models not loaded!")
+                    raise gr.Error("System not initialized! Please click 'Load Models' first (even for API usage).")
                 args, get_caption_fn = ARGS, CAPTION_FN
 
                 if not input_dir_value:
@@ -1083,10 +1095,11 @@ def gui():
 
                 args.image_size = int(image_size_value)
 
-                args.data_path = str(input_dir_value)
+                args.data_path = str(input_dir_value).strip()
                 args.run_method = str(run_method_value)
                 args.recursive = bool(recursive_value)
-                args.custom_caption_save_path = str(custom_caption_save_path_value)
+                args.custom_caption_save_path = str(custom_caption_save_path_value).strip()
+                args.num_workers = int(num_workers_value)
                 args.skip_exists = bool(skip_exists_value)
                 args.not_overwrite = bool(not_overwrite_value)
                 args.caption_extension = str(caption_extension_value)
@@ -1096,7 +1109,7 @@ def gui():
                 if args.data_path and not os.path.exists(args.data_path):
                     raise gr.Error(f"{args.data_path} NOT FOUND!!!")
                 if args.custom_caption_save_path and not os.path.exists(args.custom_caption_save_path):
-                    raise gr.Error(f"{args.data_path} NOT FOUND!!!")
+                    raise gr.Error(f"Custom caption save path '{args.custom_caption_save_path}' NOT FOUND!!!")
 
                 start_time = time.monotonic()
                 try:
@@ -1118,7 +1131,7 @@ def gui():
                     raise gr.Error(error_msg)
 
                 if auto_unload_value:
-                    caption_unload_models()
+                    get_caption_fn.unload_models()
 
                 return gr.update(value="Done!", variant='stop')
             else:

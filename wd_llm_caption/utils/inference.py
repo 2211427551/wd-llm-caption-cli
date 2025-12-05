@@ -63,12 +63,15 @@ def get_caption_file_path(
             caption_file = str(os.path.splitext(os.path.basename(image_path))[0])
 
         else:
-            caption_file = os.path.splitext(str(image_path)[len(str(data_path)):])[0]
+            caption_file = os.path.splitext(str(image_path)[len(str(data_path)) + len(os.path.sep):])[0]
 
-        caption_file = caption_file[1:] if caption_file[0] == '/' else caption_file
+        caption_file = caption_file.lstrip(os.path.sep)
         caption_file = os.path.join(custom_caption_save_path, caption_file)
         # Make dir if not exist.
-        os.makedirs(Path(str(caption_file)[:-len(os.path.basename(caption_file))]), exist_ok=True)
+        if os.path.basename(caption_file): # Ensure there is a filename component
+            os.makedirs(os.path.dirname(caption_file), exist_ok=True)
+        else: # This case handles if caption_file is just a directory
+            os.makedirs(caption_file, exist_ok=True)
         caption_file = Path(str(caption_file) + caption_extension)
 
     else:

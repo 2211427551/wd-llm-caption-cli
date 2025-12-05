@@ -3,6 +3,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image
 from tqdm import tqdm
@@ -27,12 +28,7 @@ class Caption:
     def __init__(self):
         # Set flags
         self.use_wd = False
-        self.use_joy = False
-        self.use_llama = False
-        self.use_qwen = False
-        self.use_minicpm = False
-        self.use_florence = False
-        self.use_openai = False
+        self.use_llm = False # Simplified flag
 
         self.my_logger = None
 
@@ -69,11 +65,9 @@ class Caption:
                 log_file_path = Path(args.custom_caption_save_path)
 
             log_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-            # caption_failed_list_file = f'Caption_failed_list_{log_time}.txt'
 
             if os.path.exists(data_dir_path):
                 log_name = os.path.basename(data_dir_path)
-
             else:
                 print(f'{data_dir_path} NOT FOUND!!!')
                 raise FileNotFoundError
@@ -87,7 +81,6 @@ class Caption:
         if str(args.log_level).lower() in 'debug, info, warning, error, critical':
             self.my_logger = Logger(args.log_level, log_file).logger
             self.my_logger.info(f'Set log level to "{args.log_level}"')
-
         else:
             self.my_logger = Logger('INFO', log_file).logger
             self.my_logger.warning('Invalid log level, set log level to "INFO"!')
@@ -101,13 +94,8 @@ class Caption:
     ):
         # Set flags
         self.use_wd = True if args.caption_method in ["wd", "wd+llm"] else False
-        self.use_joy = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "joy" else False
-        self.use_llama = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "llama" else False
-        self.use_qwen = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "qwen" else False
-        self.use_minicpm = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "minicpm" else False
-        self.use_florence = True if args.caption_method in ["llm", "wd+llm"] and \
-                                    args.llm_choice == "florence" else False
-        self.use_openai = True if args.caption_method in ["llm", "wd+llm"] and args.llm_choice == "openai" else False
+        self.use_llm = True if args.caption_method in ["llm", "wd+llm"] else False
+        
         # Set models save path
         if os.path.exists(Path(args.models_save_path)):
             models_save_path = Path(args.models_save_path)
@@ -117,718 +105,293 @@ class Caption:
             models_save_path = Path(DEFAULT_MODELS_SAVE_PATH)
 
         if self.use_wd:
-            # Check wd models path from json
-            if not args.wd_config:
-                wd_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_wd.json')
-            else:
-                wd_config_file = Path(args.wd_config)
-            # Download wd models
+            wd_config_file = Path(args.wd_config) if args.wd_config else os.path.join(Path(__file__).parent, 'configs', 'default_wd.json')
             self.wd_model_path, self.wd_tags_csv_path = download_models(
-                logger=self.my_logger,
-                models_type="wd",
-                args=args,
-                config_file=wd_config_file,
-                models_save_path=models_save_path,
+                logger=self.my_logger, models_type="wd", args=args,
+                config_file=wd_config_file, models_save_path=models_save_path,
             )
 
-        if self.use_joy:
-            # Check joy models path from json
-            if not args.llm_config:
-                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_joy.json')
-            else:
-                llm_config_file = Path(args.llm_config)
-            # Download joy models
-            self.llm_models_paths = download_models(
-                logger=self.my_logger,
-                models_type="joy",
-                args=args,
-                config_file=llm_config_file,
-                models_save_path=models_save_path,
-            )
+        if self.use_llm:
+            llm_configs = {
+                "joy": "default_joy.json",
+                "llama": "default_llama_3.2V.json",
+                "qwen": "default_qwen2_vl.json",
+                "minicpm": "default_minicpm.json",
+                "florence": "default_florence.json",
+                "openai": "default_openai.json",
+            }
+            config_filename = llm_configs.get(args.llm_choice)
+            if config_filename:
+                llm_config_file = Path(args.llm_config) if args.llm_config else os.path.join(Path(__file__).parent, 'configs', config_filename)
+                if args.llm_choice == "openai":
+                    self.my_logger.info("Using OpenAI-compatible API, no model download required.")
+                    self.llm_models_paths = None
+                else:
+                    self.llm_models_paths = download_models(
+                        logger=self.my_logger, models_type=args.llm_choice, args=args,
+                        config_file=llm_config_file, models_save_path=models_save_path,
+                    )
 
-        elif self.use_llama:
-            # Check joy models path from json
-            if not args.llm_config:
-                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_llama_3.2V.json')
-            else:
-                llm_config_file = Path(args.llm_config)
-            # Download Llama models
-            self.llm_models_paths = download_models(
-                logger=self.my_logger,
-                models_type="llama",
-                args=args,
-                config_file=llm_config_file,
-                models_save_path=models_save_path,
-            )
-        elif self.use_qwen:
-            if not args.llm_config:
-                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_qwen2_vl.json')
-            else:
-                llm_config_file = Path(args.llm_config)
-            # Download Qwen models
-            self.llm_models_paths = download_models(
-                logger=self.my_logger,
-                models_type="qwen",
-                args=args,
-                config_file=llm_config_file,
-                models_save_path=models_save_path,
-            )
-        elif self.use_minicpm:
-            if not args.llm_config:
-                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_minicpm.json')
-            else:
-                llm_config_file = Path(args.llm_config)
-            # Download Qwen models
-            self.llm_models_paths = download_models(
-                logger=self.my_logger,
-                models_type="minicpm",
-                args=args,
-                config_file=llm_config_file,
-                models_save_path=models_save_path,
-            )
-        elif self.use_florence:
-            if not args.llm_config:
-                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_florence.json')
-            else:
-                llm_config_file = Path(args.llm_config)
-            # Download Qwen models
-            self.llm_models_paths = download_models(
-                logger=self.my_logger,
-                models_type="florence",
-                args=args,
-                config_file=llm_config_file,
-                models_save_path=models_save_path,
-            )
-        elif self.use_openai:
-            # OpenAI API doesn't require downloading models
-            self.my_logger.info("Using OpenAI-compatible API, no model download required.")
-            if not args.llm_config:
-                llm_config_file = os.path.join(Path(__file__).parent, 'configs', 'default_openai.json')
-            else:
-                llm_config_file = Path(args.llm_config)
-            # Just for consistency, we'll set paths to None but validate config exists
-            self.llm_models_paths = None
-
-    def load_models(
-            self,
-            args: argparse.Namespace
-    ):
-        self.my_logger.info("Starting to load models...")
-        if self.use_wd:
-            # Load wd models
+    def load_wd_model(self, args: argparse.Namespace):
+        if self.my_tagger is None:
+            self.my_logger.info("Loading WD Tagger model...")
             self.my_tagger = Tagger(
-                logger=self.my_logger,
-                args=args,
-                model_path=self.wd_model_path,
-                tags_csv_path=self.wd_tags_csv_path
+                logger=self.my_logger, args=args,
+                model_path=self.wd_model_path, tags_csv_path=self.wd_tags_csv_path
             )
             self.my_tagger.load_model()
+            self.my_logger.info("WD Tagger model loaded.")
 
-        if self.use_joy:
-            # Load Joy models
+    def load_llm_model(self, args: argparse.Namespace):
+        if self.my_llm is None:
+            self.my_logger.info(f"Loading LLM ({args.llm_choice}) model...")
             self.my_llm = LLM(
-                logger=self.my_logger,
-                models_type="joy",
-                models_paths=self.llm_models_paths,
-                args=args,
+                logger=self.my_logger, models_type=args.llm_choice,
+                models_paths=self.llm_models_paths, args=args,
             )
             self.my_llm.load_model()
-        elif self.use_llama:
-            # Load Llama models
-            self.my_llm = LLM(
-                logger=self.my_logger,
-                models_type="llama",
-                models_paths=self.llm_models_paths,
-                args=args,
+            self.my_logger.info(f"LLM ({args.llm_choice}) model loaded.")
+
+    def load_models(self, args: argparse.Namespace):
+        """Loads all models required by the caption_method."""
+        if self.use_wd:
+            self.load_wd_model(args)
+        if self.use_llm:
+            self.load_llm_model(args)
+
+    def _process_image_wd(self, image_path, args):
+        try:
+            wd_caption_file = get_caption_file_path(
+                self.my_logger, data_path=args.data_path, image_path=Path(image_path),
+                custom_caption_save_path=args.custom_caption_save_path, caption_extension=args.wd_caption_extension
             )
-            self.my_llm.load_model()
-        elif self.use_qwen:
-            # Load Qwen models
-            self.my_llm = LLM(
-                logger=self.my_logger,
-                models_type="qwen",
-                models_paths=self.llm_models_paths,
-                args=args,
-            )
-            self.my_llm.load_model()
-        elif self.use_minicpm:
-            # Load Qwen models
-            self.my_llm = LLM(
-                logger=self.my_logger,
-                models_type="minicpm",
-                models_paths=self.llm_models_paths,
-                args=args,
-            )
-            self.my_llm.load_model()
-        elif self.use_florence:
-            # Load Florence models
-            self.my_llm = LLM(
-                logger=self.my_logger,
-                models_type="florence",
-                models_paths=self.llm_models_paths,
-                args=args,
-            )
-            self.my_llm.load_model()
-        elif self.use_openai:
-            self.my_logger.info("Loading OpenAI-compatible API...")
-            # Load OpenAI-compatible API
-            self.my_llm = LLM(
-                logger=self.my_logger,
-                models_type="openai",
-                models_paths=self.llm_models_paths,
-                args=args,
-            )
-            self.my_logger.info("Calling my_llm.load_model()...")
-            self.my_llm.load_model()
-            self.my_logger.info("my_llm.load_model() finished.")
+            if args.skip_exists and os.path.isfile(wd_caption_file):
+                return f"Skipped (exists): {wd_caption_file}"
 
-    def run_inference(
-            self,
-            args: argparse.Namespace
-    ):
-        start_inference_time = time.monotonic()
-        # Inference
-        if self.use_wd and args.caption_method == "wd+llm":
-            # Set joy user prompt
-            if args.llm_user_prompt == DEFAULT_USER_PROMPT_WITHOUT_WD:
-                if not args.llm_caption_without_wd:
-                    self.my_logger.warning("LLM user prompt not defined, using default version with wd tags...")
-                    args.llm_user_prompt = DEFAULT_USER_PROMPT_WITH_WD
-            # run
-            if args.run_method == "sync":
-                self.my_logger.info("Running in sync mode...")
-                image_paths = get_image_paths(logger=self.my_logger, path=Path(args.data_path),
-                                              recursive=args.recursive)
-                pbar = tqdm(total=len(image_paths), smoothing=0.0)
-                for image_path in image_paths:
-                    try:
-                        pbar.set_description('Processing: {}'.format(image_path if len(image_path) <= 40 else
-                                                                     image_path[:15]) + ' ... ' + image_path[-20:])
-                        # Caption file
-                        wd_caption_file = get_caption_file_path(
-                            self.my_logger,
-                            data_path=args.data_path,
-                            image_path=Path(image_path),
-                            custom_caption_save_path=args.custom_caption_save_path,
-                            caption_extension=args.wd_caption_extension
-                        )
-                        llm_caption_file = get_caption_file_path(
-                            self.my_logger,
-                            data_path=args.data_path,
-                            image_path=Path(image_path),
-                            custom_caption_save_path=args.custom_caption_save_path,
-                            caption_extension=args.llm_caption_extension if args.save_caption_together else
-                            args.caption_extension
-                        )
-                        # image to pillow
-                        image = Image.open(image_path)
-                        tag_text = ""
-                        caption = ""
+            image = Image.open(image_path).convert("RGB")
+            tag_text, _, _, _ = self.my_tagger.get_tags(image=image)
 
-                        if not (args.skip_exists and os.path.isfile(wd_caption_file)):
-                            # WD Caption
-                            tag_text, rating_tag_text, character_tag_text, general_tag_text = self.my_tagger.get_tags(
-                                image=image
-                            )
-
-                            if not (args.not_overwrite and os.path.isfile(wd_caption_file)):
-                                # Write WD Caption file
-                                with open(wd_caption_file, "wt", encoding="utf-8") as f:
-                                    f.write(tag_text + "\n")
-                            else:
-                                self.my_logger.warning(f'`not_overwrite` ENABLED!!! '
-                                                       f'WD Caption file {wd_caption_file} already exist, '
-                                                       f'Skip save caption.')
-
-                            # Console output
-                            self.my_logger.debug(f"Image path: {image_path}")
-                            self.my_logger.debug(f"WD Caption path: {wd_caption_file}")
-                            if args.wd_model_name.lower().startswith("wd"):
-                                self.my_logger.debug(f"WD Rating tags: {rating_tag_text}")
-                                self.my_logger.debug(f"WD Character tags: {character_tag_text}")
-                            self.my_logger.debug(f"WD General tags: {general_tag_text}")
-                        else:
-                            self.my_logger.warning(f'`skip_exists` ENABLED!!! '
-                                                   f'WD Caption file {wd_caption_file} already exists, '
-                                                   f'Skip save it!')
-
-                        if not (args.skip_exists and os.path.isfile(llm_caption_file)):
-                            # LLM Caption
-                            caption = self.my_llm.get_caption(
-                                image=image,
-                                system_prompt=str(args.llm_system_prompt),
-                                user_prompt=str(args.llm_user_prompt).format(wd_tags=tag_text),
-                                temperature=args.llm_temperature,
-                                max_new_tokens=args.llm_max_tokens
-                            )
-                            if not (args.not_overwrite and os.path.isfile(llm_caption_file)):
-                                # Write LLM Caption
-                                with open(llm_caption_file, "wt", encoding="utf-8") as f:
-                                    f.write(caption + "\n")
-                                    self.my_logger.debug(f"Image path: {image_path}")
-                                    self.my_logger.debug(f"LLM Caption path: {llm_caption_file}")
-                                    self.my_logger.debug(f"LLM Caption content: {caption}")
-                            else:
-                                self.my_logger.warning(f'`not_overwrite` ENABLED!!! '
-                                                       f'LLM Caption file {llm_caption_file} already exist, '
-                                                       f'skip save it!')
-                        else:
-                            self.my_logger.warning(f'`skip_exists` ENABLED!!! '
-                                                   f'LLM Caption file {llm_caption_file} already exists, '
-                                                   f'skip save it!')
-
-                        if args.save_caption_together:
-                            together_caption_file = get_caption_file_path(
-                                self.my_logger,
-                                data_path=args.data_path,
-                                image_path=Path(image_path),
-                                custom_caption_save_path=args.custom_caption_save_path,
-                                caption_extension=args.caption_extension
-                            )
-                            self.my_logger.debug(
-                                f"`save_caption_together` Enabled, "
-                                f"will save WD tags and LLM captions in a new file `{together_caption_file}`")
-                            if not (args.skip_exists and os.path.isfile(together_caption_file)):
-                                if not tag_text or not caption:
-                                    self.my_logger.warning(
-                                        "WD tags or LLM Caption is null, skip save them together in one file!")
-                                    pbar.update(1)
-                                    continue
-
-                                if not (args.not_overwrite and os.path.isfile(together_caption_file)):
-                                    with open(together_caption_file, "wt", encoding="utf-8") as f:
-                                        together_caption = f"{tag_text} {args.save_caption_together_seperator} {caption}"
-                                        f.write(together_caption + "\n")
-                                    self.my_logger.debug(f"Together Caption save path: {together_caption_file}")
-                                    self.my_logger.debug(f"Together Caption content: {together_caption}")
-                                else:
-                                    self.my_logger.warning(f'`not_overwrite` ENABLED!!! '
-                                                           f'Together Caption file {together_caption_file} already exist, '
-                                                           f'skip save it!')
-                            else:
-                                self.my_logger.warning(f'`skip_exists` ENABLED!!! '
-                                                       f'LLM Caption file {llm_caption_file} already exists, '
-                                                       f'skip save it!')
-
-                    except Exception as e:
-                        self.my_logger.error(f"Failed to caption image: {image_path}, skip it.\nerror info: {e}")
-                        pbar.update(1)
-                        continue
-
-                    pbar.update(1)
-                pbar.close()
-
-                if args.wd_tags_frequency:
-                    sorted_tags = sorted(self.my_tagger.tag_freq.items(), key=lambda x: x[1], reverse=True)
-                    self.my_logger.info('WD Tag frequencies:')
-                    for tag, freq in sorted_tags:
-                        self.my_logger.info(f'{tag}: {freq}')
+            if not (args.not_overwrite and os.path.isfile(wd_caption_file)):
+                with open(wd_caption_file, "w", encoding="utf-8") as f:
+                    f.write(tag_text + "\n")
+                return f"Tagged: {wd_caption_file}"
             else:
-                self.my_logger.info("Running in queue mode...")
-                pbar = tqdm(total=2, smoothing=0.0)
-                pbar.set_description('Processing with WD model...')
-                self.my_tagger.inference()
-                pbar.update(1)
-                if self.use_joy:
-                    pbar.set_description('Processing with Joy model...')
-                elif self.use_llama:
-                    pbar.set_description('Processing with Llama model...')
-                elif self.use_qwen:
-                    pbar.set_description('Processing with Qwen model...')
-                elif self.use_minicpm:
-                    pbar.set_description('Processing with Mini-CPM model...')
-                elif self.use_florence:
-                    pbar.set_description('Processing with Florence model...')
-                elif self.use_openai:
-                    pbar.set_description('Processing with OpenAI-compatible API...')
-                self.my_llm.inference()
-                pbar.update(1)
+                return f"Skipped (overwrite disabled): {wd_caption_file}"
+        except Exception as e:
+            self.my_logger.error(f"Failed to WD-tag {image_path}: {e}")
+            return f"Failed: {image_path}"
 
-                pbar.close()
-        else:
-            if self.use_wd:
-                self.my_tagger.inference()
-            elif self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence or self.use_openai:
-                self.my_llm.inference()
+    def _process_image_llm(self, image_path, args):
+        try:
+            # Define file paths
+            final_caption_ext = args.caption_extension
+            llm_caption_file = get_caption_file_path(
+                self.my_logger, data_path=args.data_path, image_path=Path(image_path),
+                custom_caption_save_path=args.custom_caption_save_path,
+                caption_extension=args.llm_caption_extension if args.save_caption_together else final_caption_ext
+            )
 
+            if args.skip_exists and os.path.isfile(llm_caption_file):
+                 # Also check for the final combined file if that option is enabled
+                if args.save_caption_together:
+                    together_caption_file = get_caption_file_path(
+                        self.my_logger, data_path=args.data_path, image_path=Path(image_path),
+                        custom_caption_save_path=args.custom_caption_save_path, caption_extension=final_caption_ext
+                    )
+                    if os.path.isfile(together_caption_file):
+                        return f"Skipped (exists): {together_caption_file}"
+                else:
+                    return f"Skipped (exists): {llm_caption_file}"
+
+            # Read WD tags if needed
+            tag_text = ""
+            if args.caption_method == "wd+llm" or (args.caption_method == "llm" and args.llm_read_wd_caption):
+                wd_caption_file = get_caption_file_path(
+                    self.my_logger, data_path=args.data_path, image_path=Path(image_path),
+                    custom_caption_save_path=args.custom_caption_save_path, caption_extension=args.wd_caption_extension
+                )
+                if os.path.exists(wd_caption_file):
+                    with open(wd_caption_file, "r", encoding="utf-8") as f:
+                        tag_text = f.read().strip()
+                else:
+                    self.my_logger.warning(f"WD caption file not found for {image_path}, proceeding without tags.")
+
+            # Get LLM caption
+            image = Image.open(image_path).convert("RGB")
+            user_prompt = str(args.llm_user_prompt).format(wd_tags=tag_text)
+            caption_text = self.my_llm.get_caption(
+                image=image, system_prompt=str(args.llm_system_prompt),
+                user_prompt=user_prompt, temperature=args.llm_temperature, max_new_tokens=args.llm_max_tokens
+            )
+
+            # Save captions
+            if args.save_caption_together:
+                together_caption_file = get_caption_file_path(
+                    self.my_logger, data_path=args.data_path, image_path=Path(image_path),
+                    custom_caption_save_path=args.custom_caption_save_path, caption_extension=final_caption_ext
+                )
+                if not (args.not_overwrite and os.path.isfile(together_caption_file)):
+                    with open(together_caption_file, "w", encoding="utf-8") as f:
+                        f.write(f"{tag_text} {args.save_caption_together_seperator} {caption_text}\n")
+                    return f"Saved combined caption to {together_caption_file}"
+                else:
+                    return f"Skipped combined (overwrite disabled): {together_caption_file}"
+            else:
+                if not (args.not_overwrite and os.path.isfile(llm_caption_file)):
+                    with open(llm_caption_file, "w", encoding="utf-8") as f:
+                        f.write(caption_text + "\n")
+                    return f"Saved LLM caption to {llm_caption_file}"
+                else:
+                    return f"Skipped LLM caption (overwrite disabled): {llm_caption_file}"
+
+        except Exception as e:
+            self.my_logger.error(f"Failed to LLM-caption {image_path}: {e}")
+            return f"Failed: {image_path}"
+
+    def run_inference(self, args: argparse.Namespace):
+        start_inference_time = time.monotonic()
+        image_paths = get_image_paths(logger=self.my_logger, path=Path(args.data_path), recursive=args.recursive)
+        self.my_logger.info(f"Found {len(image_paths)} images to process.")
+
+        # --- Stage 1: WD Tagging ---
+        if self.use_wd:
+            self.my_logger.info("--- Starting Stage 1: WD Tagging ---")
+            self.load_wd_model(args)
+            
+            with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+                futures = [executor.submit(self._process_image_wd, img_path, args) for img_path in image_paths]
+                for future in tqdm(as_completed(futures), total=len(image_paths), desc="WD Tagging"):
+                    self.my_logger.debug(future.result())
+            
+            if self.use_llm:
+                self.my_logger.info("Unloading WD model to free VRAM for LLM...")
+                self.unload_models(unload_llm=False) # Unload only WD
+
+        # --- Stage 2: LLM Captioning ---
+        if self.use_llm:
+            self.my_logger.info("--- Starting Stage 2: LLM Captioning ---")
+            self.load_llm_model(args)
+
+            with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+                futures = [executor.submit(self._process_image_llm, img_path, args) for img_path in image_paths]
+                for future in tqdm(as_completed(futures), total=len(image_paths), desc="LLM Captioning"):
+                    self.my_logger.debug(future.result())
+        
         total_inference_time = time.monotonic() - start_inference_time
+        # ... (time formatting logic remains the same)
         days = total_inference_time // (24 * 3600)
         total_inference_time %= (24 * 3600)
         hours = total_inference_time // 3600
         total_inference_time %= 3600
         minutes = total_inference_time // 60
         seconds = total_inference_time % 60
-        days = f"{days:.0f} Day(s) " if days > 0 else ""
-        hours = f"{hours:.0f} Hour(s) " if hours > 0 or (days and hours == 0) else ""
-        minutes = f"{minutes:.0f} Min(s) " if minutes > 0 or (hours and minutes == 0) else ""
-        seconds = f"{seconds:.2f} Sec(s)"
-        self.my_logger.info(f"All work done with in {days}{hours}{minutes}{seconds}.")
+        days_str = f"{days:.0f} Day(s) " if days > 0 else ""
+        hours_str = f"{hours:.0f} Hour(s) " if hours > 0 or (days and hours == 0) else ""
+        minutes_str = f"{minutes:.0f} Min(s) " if minutes > 0 or (hours and minutes == 0) else ""
+        seconds_str = f"{seconds:.2f} Sec(s)"
+        self.my_logger.info(f"All work done in {days_str}{hours_str}{minutes_str}{seconds_str}.")
 
-    def unload_models(
-            self
-    ):
-        # Unload models
+    def unload_models(self, unload_wd=True, unload_llm=True):
         unloaded = False
-        if self.use_wd:
+        if self.use_wd and unload_wd and self.my_tagger:
             self.my_tagger.unload_model()
-        if self.use_joy or self.use_llama or self.use_qwen or self.use_minicpm or self.use_florence or self.use_openai:
-            if self.my_llm:
-                unloaded = self.my_llm.unload_model()
+            self.my_tagger = None
+            self.my_logger.info("WD Tagger model unloaded.")
+        if self.use_llm and unload_llm and self.my_llm:
+            unloaded = self.my_llm.unload_model()
+            self.my_llm = None
+            self.my_logger.info("LLM model unloaded.")
         
-        # Safely empty cache after all models are unloaded, only if not in OpenAI mode
-        if not self.use_openai:
+        if unload_wd and unload_llm:
             try:
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                    if self.my_logger:
-                        self.my_logger.info("CUDA cache emptied.")
+                    if self.my_logger: self.my_logger.info("CUDA cache emptied.")
             except ImportError:
-                if self.my_logger:
-                    self.my_logger.debug("Torch not installed, skipping CUDA cache clear.")
+                if self.my_logger: self.my_logger.debug("Torch not installed, skipping CUDA cache clear.")
             except Exception as e:
-                if self.my_logger:
-                    self.my_logger.error(f"Failed to empty CUDA cache: {e}")
-
+                if self.my_logger: self.my_logger.error(f"Failed to empty CUDA cache: {e}")
         return unloaded
 
 
 def setup_args() -> argparse.Namespace:
     args = argparse.ArgumentParser()
     base_args = args.add_argument_group("Base")
-    base_args.add_argument(
-        '--data_path',
-        type=str,
-        help='path for data.'
-    )
-    base_args.add_argument(
-        '--recursive',
-        action='store_true',
-        help='Include recursive dirs'
-    )
+    base_args.add_argument('--data_path', type=str, help='path for data.')
+    base_args.add_argument('--recursive', action='store_true', help='Include recursive dirs')
 
     log_args = args.add_argument_group("Logs")
-    log_args.add_argument(
-        '--log_level',
-        type=str,
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-        default='INFO',
-        help='set log level, default is `INFO`'
-    )
-    log_args.add_argument(
-        '--save_logs',
-        action='store_true',
-        help='save log file.'
-    )
+    log_args.add_argument('--log_level', type=str, choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], default='INFO', help='set log level, default is `INFO`')
+    log_args.add_argument('--save_logs', action='store_true', help='save log file.')
 
     download_args = args.add_argument_group("Download")
-    download_args.add_argument(
-        '--model_site',
-        type=str,
-        choices=['huggingface', 'modelscope'],
-        default='huggingface',
-        help='download models from model site huggingface or modelscope, default is `huggingface`.'
-    )
-    download_args.add_argument(
-        '--models_save_path',
-        type=str,
-        default=DEFAULT_MODELS_SAVE_PATH,
-        help='path to save models, default is `models`.'
-    )
-    download_args.add_argument(
-        '--use_sdk_cache',
-        action='store_true',
-        help='use sdk\'s cache dir to store models. \
-            if this option enabled, `--models_save_path` will be ignored.'
-    )
-    download_args.add_argument(
-        '--download_method',
-        type=str,
-        choices=["SDK", "URL"],
-        default='SDK',
-        help='download models via SDK or URL, default is `SDK`.'
-    )
-    download_args.add_argument(
-        '--force_download',
-        action='store_true',
-        help='force download even file exists.'
-    )
-    download_args.add_argument(
-        '--skip_download',
-        action='store_true',
-        help='skip download if exists.'
-    )
+    download_args.add_argument('--model_site', type=str, choices=['huggingface', 'modelscope'], default='huggingface', help='download models from model site, default is `huggingface`.')
+    download_args.add_argument('--models_save_path', type=str, default=DEFAULT_MODELS_SAVE_PATH, help='path to save models, default is `models`.')
+    download_args.add_argument('--use_sdk_cache', action='store_true', help='use sdk\'s cache dir to store models.')
+    download_args.add_argument('--download_method', type=str, choices=["SDK", "URL"], default='SDK', help='download models via SDK or URL, default is `SDK`.')
+    download_args.add_argument('--force_download', action='store_true', help='force download even file exists.')
+    download_args.add_argument('--skip_download', action='store_true', help='skip download if exists.')
 
     caption_args = args.add_argument_group("Caption")
-    caption_args.add_argument(
-        '--caption_method',
-        type=str,
-        default='wd+llm',
-        choices=['wd', 'llm', 'wd+llm'],
-        help='method for caption [`wd`, `llm`, `wd+llm`], select wd or llm, or both of them to caption, '
-             'default is `wd+llm`.',
-    )
-    caption_args.add_argument(
-        '--run_method',
-        type=str,
-        default='sync',
-        choices=['sync', 'queue'],
-        help='''running method for wd+llm caption[`sync`, `queue`], need `caption_method` set to `wd+llm`.
-             if sync, image will caption with wd models,
-             then caption with joy models while wd captions in joy user prompt.
-             if queue, all images will caption with wd models first,
-             then caption all of them with joy models while wd captions in joy user prompt.
-             default is `sync`.'''
-    )
-    caption_args.add_argument(
-        '--caption_extension',
-        type=str,
-        default='.txt',
-        help='extension of caption file, default is `.txt`. '
-             'If `caption_method` not `wd+llm`, it will be wd or llm caption file extension.'
-    )
-    caption_args.add_argument(
-        '--save_caption_together',
-        action='store_true',
-        help='Save WD tags and LLM captions in one file.'
-    )
-    caption_args.add_argument(
-        '--save_caption_together_seperator',
-        default='|',
-        help='Seperator between WD and LLM captions, if they are saved in one file.'
-    )
-    caption_args.add_argument(
-        '--image_size',
-        type=int,
-        default=1024,
-        help='resize image to suitable, default is `1024`.'
-    )
-    caption_args.add_argument(
-        '--skip_exists',
-        action='store_true',
-        help='not caption file if caption exists.'
-    )
-    caption_args.add_argument(
-        '--not_overwrite',
-        action='store_true',
-        help='not overwrite caption file if exists.'
-    )
-    caption_args.add_argument(
-        '--custom_caption_save_path',
-        type=str,
-        default=None,
-        help='custom caption file save path.'
-    )
+    caption_args.add_argument('--caption_method', type=str, default='wd+llm', choices=['wd', 'llm', 'wd+llm'], help='method for caption, default is `wd+llm`.')
+    caption_args.add_argument('--num_workers', type=int, default=1, help='Number of concurrent workers for batch processing. Default is 1.')
+    caption_args.add_argument('--caption_extension', type=str, default='.txt', help='extension of caption file.')
+    caption_args.add_argument('--save_caption_together', action='store_true', help='Save WD tags and LLM captions in one file.')
+    caption_args.add_argument('--save_caption_together_seperator', default='|', help='Seperator between WD and LLM captions.')
+    caption_args.add_argument('--image_size', type=int, default=1024, help='resize image to suitable, default is `1024`.')
+    caption_args.add_argument('--skip_exists', action='store_true', help='not caption file if caption exists.')
+    caption_args.add_argument('--not_overwrite', action='store_true', help='not overwrite caption file if exists.')
+    caption_args.add_argument('--custom_caption_save_path', type=str, default=None, help='custom caption file save path.')
+    # Deprecate run_method for new logic
+    caption_args.add_argument('--run_method', type=str, default='sync', choices=['sync', 'queue'], help='DEPRECATED. Concurrency is now default for batch mode.')
 
     wd_args = args.add_argument_group("WD Caption")
-    wd_args.add_argument(
-        '--wd_config',
-        type=str,
-        help='configs json for wd tagger models, default is `default_wd.json`'
-    )
-    wd_args.add_argument(
-        '--wd_model_name',
-        type=str,
-        help='wd tagger model name will be used for caption inference, default is `wd-eva02-large-tagger-v3`.'
-    )
-    wd_args.add_argument(
-        '--wd_force_use_cpu',
-        action='store_true',
-        help='force use cpu for wd models inference.'
-    )
-    wd_args.add_argument(
-        '--wd_caption_extension',
-        type=str,
-        default=".wdcaption",
-        help='extension for wd captions files, default is `.wdcaption`.'
-    )
-    wd_args.add_argument(
-        '--wd_remove_underscore',
-        action='store_true',
-        help='replace underscores with spaces in the output tags.',
-    )
-    wd_args.add_argument(
-        "--wd_undesired_tags",
-        type=str,
-        default='',
-        help='comma-separated list of undesired tags to remove from the output.'
-    )
-    wd_args.add_argument(
-        '--wd_tags_frequency',
-        action='store_true',
-        help='Show frequency of tags for images.'
-    )
-    wd_args.add_argument(
-        '--wd_threshold',
-        type=float,
-        default=0.35,
-        help='threshold of confidence to add a tag, default value is `0.35`.'
-    )
-    wd_args.add_argument(
-        '--wd_general_threshold',
-        type=float,
-        default=None,
-        help='threshold of confidence to add a tag from general category, same as --threshold if omitted.'
-    )
-    wd_args.add_argument(
-        '--wd_character_threshold',
-        type=float,
-        default=None,
-        help='threshold of confidence to add a tag for character category, same as --threshold if omitted.'
-    )
-    # wd_args.add_argument(
-    #     '--wd_maximum_cut_threshold',
-    #     action = 'store_true',
-    #     help = 'Enable Maximum Cut Thresholding, will overwrite every threshold value by its calculate value.'
-    # )
-    wd_args.add_argument(
-        '--wd_add_rating_tags_to_first',
-        action='store_true',
-        help='Adds rating tags to the first.',
-    )
-    wd_args.add_argument(
-        '--wd_add_rating_tags_to_last',
-        action='store_true',
-        help='Adds rating tags to the last.',
-    )
-    wd_args.add_argument(
-        '--wd_character_tags_first',
-        action='store_true',
-        help='Always put character tags before the general tags.',
-    )
-    wd_args.add_argument(
-        '--wd_always_first_tags',
-        type=str,
-        default=None,
-        help='comma-separated list of tags to always put at the beginning, e.g. `1girl,solo`'
-    )
-    wd_args.add_argument(
-        '--wd_caption_separator',
-        type=str,
-        default=', ',
-        help='Separator for tags(include space if needed), default is `, `.'
-    )
-    wd_args.add_argument(
-        '--wd_tag_replacement',
-        type=str,
-        default=None,
-        help='tag replacement in the format of `source1,target1;source2,target2; ...`. '
-             'Escape `,` and `;` with `\\`. e.g. `tag1,tag2;tag3,tag4`',
-    )
-    wd_args.add_argument(
-        '--wd_character_tag_expand',
-        action='store_true',
-        help='expand tag tail parenthesis to another tag for character tags. e.g. '
-             '`character_name_(series)` will be expanded to `character_name, series`.',
-    )
+    wd_args.add_argument('--wd_config', type=str, help='configs json for wd tagger models, default is `default_wd.json`')
+    wd_args.add_argument('--wd_model_name', type=str, help='wd tagger model name, default is `wd-eva02-large-tagger-v3`.')
+    wd_args.add_argument('--wd_force_use_cpu', action='store_true', help='force use cpu for wd models inference.')
+    wd_args.add_argument('--wd_caption_extension', type=str, default=".wdcaption", help='extension for wd captions files, default is `.wdcaption`.' )
+    wd_args.add_argument('--wd_remove_underscore', action='store_true', help='replace underscores with spaces in the output tags.')
+    wd_args.add_argument("--wd_undesired_tags", type=str, default='', help='comma-separated list of undesired tags to remove.')
+    wd_args.add_argument('--wd_tags_frequency', action='store_true', help='Show frequency of tags for images.')
+    wd_args.add_argument('--wd_threshold', type=float, default=0.35, help='threshold of confidence to add a tag, default is `0.35`.')
+    wd_args.add_argument('--wd_general_threshold', type=float, default=None, help='threshold for general category.')
+    wd_args.add_argument('--wd_character_threshold', type=float, default=None, help='threshold for character category.')
+    wd_args.add_argument('--wd_add_rating_tags_to_first', action='store_true', help='Adds rating tags to the first.')
+    wd_args.add_argument('--wd_add_rating_tags_to_last', action='store_true', help='Adds rating tags to the last.')
+    wd_args.add_argument('--wd_character_tags_first', action='store_true', help='Put character tags before the general tags.')
+    wd_args.add_argument('--wd_always_first_tags', type=str, default=None, help='comma-separated list of tags to always put at the beginning.')
+    wd_args.add_argument('--wd_caption_separator', type=str, default=', ', help='Separator for tags, default is `, `.')
+    wd_args.add_argument('--wd_tag_replacement', type=str, default=None, help='tag replacement in the format of `source1,target1;...`.')
+    wd_args.add_argument('--wd_character_tag_expand', action='store_true', help='expand tag tail parenthesis to another tag for character tags.')
 
     llm_args = args.add_argument_group("LLM Caption")
-    llm_args.add_argument(
-        '--llm_choice',
-        type=str,
-        default='llama',
-        choices=['joy', 'llama', 'qwen', 'minicpm', 'florence', 'openai'],
-        help='select llm models[`joy`, `llama`, `qwen`, `minicpm`, `florence`, `openai`], default is `llama`.',
-    )
-    llm_args.add_argument(
-        '--llm_config',
-        type=str,
-        help='config json for LLM Caption models, default is `default_llama_3.2V.json`'
-    )
-    llm_args.add_argument(
-        '--llm_model_name',
-        type=str,
-        help='model name for inference, default is `Llama-3.2-11B-Vision-Instruct`'
-    )
-    llm_args.add_argument(
-        '--llm_patch',
-        action='store_true',
-        help='patch llm with lora for uncensored, only support `Llama-3.2-11B-Vision-Instruct` and `Joy-Caption-Pre-Alpha` now'
-    )
-    llm_args.add_argument(
-        '--llm_use_cpu',
-        action='store_true',
-        help='load LLM models use cpu.'
-    )
-    llm_args.add_argument(
-        '--llm_dtype',
-        type=str,
-        choices=["fp16", "bf16", "fp32"],
-        default='fp16',
-        help='choice joy LLM load dtype, default is `fp16`.'
-    )
-    llm_args.add_argument(
-        '--llm_qnt',
-        type=str,
-        choices=["none", "4bit", "8bit"],
-        default='none',
-        help='Enable quantization for LLM ["none","4bit", "8bit"]. default is `none`.'
-    )
-    llm_args.add_argument(
-        '--llm_caption_extension',
-        type=str,
-        default='.llmcaption',
-        help='extension of LLM caption file, default is `.llmcaption`'
-    )
-    llm_args.add_argument(
-        '--llm_read_wd_caption',
-        action='store_true',
-        help='LLM will read wd tags for inference.\nOnly effect when `caption_method` is `llm`'
-    )
-    llm_args.add_argument(
-        '--llm_caption_without_wd',
-        action='store_true',
-        help='LLM will not read WD tags for inference.\nOnly effect when `caption_method` is `wd+llm`.'
-    )
-    llm_args.add_argument(
-        '--llm_system_prompt',
-        type=str,
-        default=DEFAULT_SYSTEM_PROMPT,
-        help='system prompt for llm caption.'
-    )
-    llm_args.add_argument(
-        '--llm_user_prompt',
-        type=str,
-        default=DEFAULT_USER_PROMPT_WITHOUT_WD,
-        help='user prompt for llm caption.'
-    )
-    llm_args.add_argument(
-        '--llm_temperature',
-        type=float,
-        default=0,
-        help='temperature for LLM model, default is `0`，means use llm own default value.'
-    )
-    llm_args.add_argument(
-        '--llm_max_tokens',
-        type=int,
-        default=0,
-        help='max tokens for LLM model output, default is `0`, means use llm own default value.'
-    )
+    llm_args.add_argument('--llm_choice', type=str, default='llama', choices=['joy', 'llama', 'qwen', 'minicpm', 'florence', 'openai'], help='select llm models, default is `llama`.')
+    llm_args.add_argument('--llm_config', type=str, help='config json for LLM Caption models.')
+    llm_args.add_argument('--llm_model_name', type=str, help='model name for inference.')
+    llm_args.add_argument('--llm_patch', action='store_true', help='patch llm with lora for uncensored.')
+    llm_args.add_argument('--llm_use_cpu', action='store_true', help='load LLM models use cpu.')
+    llm_args.add_argument('--llm_dtype', type=str, choices=["fp16", "bf16", "fp32"], default='fp16', help='choice joy LLM load dtype, default is `fp16`.')
+    llm_args.add_argument('--llm_qnt', type=str, choices=["none", "4bit", "8bit"], default='none', help='Enable quantization for LLM, default is `none`.')
+    llm_args.add_argument('--llm_caption_extension', type=str, default='.llmcaption', help='extension of LLM caption file, default is `.llmcaption`')
+    llm_args.add_argument('--llm_read_wd_caption', action='store_true', help='LLM will read wd tags for inference.')
+    llm_args.add_argument('--llm_caption_without_wd', action='store_true', help='LLM will not read WD tags for inference.')
+    llm_args.add_argument('--llm_system_prompt', type=str, default=DEFAULT_SYSTEM_PROMPT, help='system prompt for llm caption.')
+    llm_args.add_argument('--llm_user_prompt', type=str, default=DEFAULT_USER_PROMPT_WITHOUT_WD, help='user prompt for llm caption.')
+    llm_args.add_argument('--llm_temperature', type=float, default=0, help='temperature for LLM model, default is `0`.')
+    llm_args.add_argument('--llm_max_tokens', type=int, default=0, help='max tokens for LLM model output, default is `0`.')
 
     openai_args = args.add_argument_group("OpenAI API")
-    openai_args.add_argument(
-        '--api_endpoint',
-        type=str,
-        help='OpenAI-compatible API endpoint URL (e.g., http://localhost:8000/v1)'
-    )
-    openai_args.add_argument(
-        '--api_key',
-        type=str,
-        help='API key for OpenAI-compatible API'
-    )
-    openai_args.add_argument(
-        '--api_model',
-        type=str,
-        help='Model name for OpenAI-compatible API'
-    )
+    openai_args.add_argument('--api_endpoint', type=str, help='OpenAI-compatible API endpoint URL')
+    openai_args.add_argument('--api_key', type=str, help='API key for OpenAI-compatible API')
+    openai_args.add_argument('--api_model', type=str, help='Model name for OpenAI-compatible API')
 
     gradio_args = args.add_argument_group("Gradio dummy args, no effects")
-    gradio_args.add_argument('--theme', type=str, default="default", choices=["default", "ocean", "origin"],
-                             help="set themes")
-    gradio_args.add_argument('--port', type=int, default="8282", help="port, default is `8282`")
-    gradio_args.add_argument('--listen', action='store_true', help="allow remote connections")
-    gradio_args.add_argument('--share', action='store_true', help="allow gradio share")
-    gradio_args.add_argument('--inbrowser', action='store_true', help="auto open in browser")
+    gradio_args.add_argument('--theme', type=str, default="default")
+    gradio_args.add_argument('--port', type=int, default="8282")
+    gradio_args.add_argument('--listen', action='store_true')
+    gradio_args.add_argument('--share', action='store_true')
+    gradio_args.add_argument('--inbrowser', action='store_true')
     return args.parse_args()
 
 
@@ -839,7 +402,7 @@ def main():
     my_caption.check_path(get_args)
     my_caption.set_logger(get_args)
     my_caption.download_models(get_args)
-    my_caption.load_models(get_args)
+    # Models are now loaded on-demand in run_inference
     my_caption.run_inference(get_args)
     my_caption.unload_models()
 
